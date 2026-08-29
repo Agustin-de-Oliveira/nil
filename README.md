@@ -1,0 +1,110 @@
+# Glint
+
+Herramienta ligera, rápida y moderna de captura y edición de pantalla para Linux, construida con **Rust**, **Tauri 2**, **Leptos (WASM)** y **Tailwind CSS**.
+
+Compatible de forma nativa tanto con entornos Wayland basados en wlroots (**Hyprland**, **Sway**) como con **GNOME** y sesiones **X11**.
+
+---
+
+## Características
+
+- **Captura rápida e interactiva**:
+  - Toque rápido en la tecla (`< 400ms`): Captura la pantalla enfocada actual directamente al portapapeles y muestra una notificación con miniatura y botón para editar.
+  - Pulsación mantenida (`400ms`): Abre el selector de área y el editor completo.
+- **Herramientas de Anotación**:
+  - Lápiz de trazo libre suave y Resaltador translúcido.
+  - Formas geométricas: Rectángulos, Flechas y Círculos.
+  - Herramienta de desenfoque/censura (Blur) para ocultar información sensible.
+  - Selector de color con lupa magnificadora (Pixel Loupe).
+  - Múltiples paletas de color y grosores de trazo.
+- **OCR Integrado (Reconocimiento de Texto)**:
+  - Extracción de texto desde la imagen con un clic mediante Tesseract.
+  - Detección automática de URLs y códigos de color con apertura y copia inmediata.
+- **Deshacer / Rehacer / Zoom / Pan**:
+  - Historial completo de cambios (`Ctrl+Z`, `Ctrl+Y`).
+  - Navegación fluida por la imagen con rueda del mouse o arrastre (`Espacio + Arrastre`).
+- **Adaptación automática al entorno**:
+  - Oculta controles redundantes en tiling window managers (Hyprland / Sway) y mantiene controles en entornos flotantes (GNOME / KDE).
+
+---
+
+## Requisitos del Sistema
+
+### Dependencias en tiempo de ejecución:
+- `grim` y `slurp` (para Hyprland / Sway / Wayland wlroots) o `gnome-screenshot` / `gdbus` (para GNOME) o `maim` / `scrot` (para X11).
+- `wl-clipboard` (Wayland) o `xclip` (X11).
+- `tesseract` (para la función de OCR).
+- `libnotify` (`notify-send` para notificaciones con acciones).
+
+En sistemas basados en Arch Linux:
+```bash
+sudo pacman -S grim slurp wl-clipboard tesseract tesseract-data-eng tesseract-data-spa libnotify
+```
+
+---
+
+## Compilación e Instalación
+
+### Requisitos de compilación:
+- **Rust** (stable) con el target WASM: `rustup target add wasm32-unknown-unknown`
+- **Trunk**: `cargo install trunk`
+- **Tailwind CSS CLI**
+
+### Compilación:
+
+```bash
+# 1. Compilar el frontend en WASM
+cd frontend
+trunk build --release
+
+# 2. Compilar el binario optimizado en Rust
+cd ../src-tauri
+cargo build --release
+```
+
+El binario compilado quedará ubicado en `src-tauri/target/release/glint`.
+
+---
+
+### Instalación en el sistema:
+
+```bash
+mkdir -p ~/.local/bin ~/.local/share/applications
+cp src-tauri/target/release/glint ~/.local/bin/glint
+chmod +x ~/.local/bin/glint
+```
+
+Crear el lanzador `.desktop`:
+
+```bash
+cat << 'EOF' > ~/.local/share/applications/glint.desktop
+[Desktop Entry]
+Name=Glint
+GenericName=Capturador de pantalla
+Comment=Captura rápida, anotación, blur y OCR
+Exec=glint --area
+Icon=accessories-screenshot
+Terminal=false
+Type=Application
+Categories=Utility;Graphics;
+EOF
+```
+
+---
+
+## Configuración de Atajos de Teclado
+
+### En Hyprland (`~/.config/hypr/hyprland/keybinds.lua`):
+
+```lua
+-- Atajos para Glint
+create_bind(vars.kbScreenshot, hl.dsp.exec_cmd("glint --press"), locked)
+create_bind(vars.kbScreenshot, hl.dsp.exec_cmd("glint --release"), { locked = true, release = true })
+create_bind(vars.kbScreenshotFreeze, hl.dsp.exec_cmd("glint --full"), locked)
+create_bind(vars.kbScreenshotRegion, hl.dsp.exec_cmd("glint --area"), locked)
+```
+
+### En GNOME:
+En **Configuración** -> **Teclado** -> **Atajos personalizados**:
+- **Comando**: `glint --area`
+- **Atajo**: `Print` o `Super + Shift + S`

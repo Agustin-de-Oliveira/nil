@@ -1,0 +1,14 @@
+target/
+**/target/
+frontend/dist/
+frontend/styles/main.css
+src-tauri/gen/
+bin/
+
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
