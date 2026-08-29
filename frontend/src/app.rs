@@ -2737,7 +2737,7 @@ pub fn App() -> impl IntoView {
                                         <div class="flex flex-col">
                                             <div class="flex items-center gap-2">
                                                 <h2 class="text-sm font-semibold text-zinc-100 tracking-tight">"Glint"</h2>
-                                                <span class="text-[10px] font-mono px-1.5 py-0.5 rounded-lg bg-white/10 text-zinc-300 border border-white/10 leading-none">"v0.1.0"</span>
+                                                <span class="text-[10px] font-mono px-1.5 py-0.5 rounded-lg bg-white/10 text-zinc-300 border border-white/10 leading-none">"v0.5.0"</span>
                                             </div>
                                             <p class="text-[11px] text-zinc-400 mt-0.5">"Captura y anotación rápida en pantalla"</p>
                                         </div>
