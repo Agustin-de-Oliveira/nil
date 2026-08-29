@@ -23,8 +23,6 @@ Compatible de forma nativa tanto con entornos Wayland basados en wlroots (**Hypr
 - **Deshacer / Rehacer / Zoom / Pan**:
   - Historial completo de cambios (`Ctrl+Z`, `Ctrl+Y`).
   - Navegación fluida por la imagen con rueda del mouse o arrastre (`Espacio + Arrastre`).
-- **Adaptación automática al entorno**:
-  - Oculta controles redundantes en tiling window managers (Hyprland / Sway) y mantiene controles en entornos flotantes (GNOME / KDE).
 
 ---
 
