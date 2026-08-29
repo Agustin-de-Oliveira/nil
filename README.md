@@ -43,14 +43,30 @@ sudo pacman -S grim slurp wl-clipboard tesseract tesseract-data-eng tesseract-da
 
 ---
 
-## Compilación e Instalación
+## Instalación Rápida
 
-### Requisitos de compilación:
-- **Rust** (stable) con el target WASM: `rustup target add wasm32-unknown-unknown`
-- **Trunk**: `cargo install trunk`
-- **Tailwind CSS CLI**
+### Opción 1: Descargar el paquete ejecutable (Recomendado)
+Dirigite a la sección de **[Releases](https://github.com/)** del repositorio y descargá el archivo según tu distribución:
 
-### Compilación:
+- **Universal (Cualquier distribución Linux)**: Descargá `Glint_x86_64.AppImage`. Dale permisos de ejecución y abrilo directamente con doble clic:
+  ```bash
+  chmod +x Glint_x86_64.AppImage
+  ./Glint_x86_64.AppImage
+  ```
+- **Ubuntu / Debian / Pop!_OS / Linux Mint**: Descargá `glint_amd64.deb` e instalalo con doble clic o con:
+  ```bash
+  sudo dpkg -i glint_amd64.deb
+  ```
+- **Fedora / openSUSE / RHEL**: Descargá `glint_x86_64.rpm` e instalalo con doble clic o con:
+  ```bash
+  sudo rpm -i glint_x86_64.rpm
+  ```
+
+---
+
+## Compilación Manual (Desarrollo)
+
+Si preferís compilarlo desde el código fuente:
 
 ```bash
 # 1. Compilar el frontend en WASM
@@ -62,14 +78,9 @@ cd ../src-tauri
 cargo build --release
 ```
 
-El binario compilado quedará ubicado en `src-tauri/target/release/glint`.
-
----
-
-### Instalación en el sistema:
-
+Instalar el binario generado localmente:
 ```bash
-mkdir -p ~/.local/bin ~/.local/share/applications
+mkdir -p ~/.local/bin
 cp src-tauri/target/release/glint ~/.local/bin/glint
 chmod +x ~/.local/bin/glint
 ```
