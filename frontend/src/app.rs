@@ -80,6 +80,34 @@ pub struct OcrBlock {
     pub h: f64,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct GalleryItem {
+    pub path: String,
+    pub filename: String,
+    pub timestamp: u64,
+    pub width: u32,
+    pub height: u32,
+    pub preview_base64: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct GalleryResponse {
+    pub items: Vec<GalleryItem>,
+    pub total: usize,
+    pub has_more: bool,
+}
+
+#[derive(Serialize)]
+pub struct GetGalleryArgs {
+    pub offset: usize,
+    pub limit: usize,
+}
+
+#[derive(Serialize)]
+pub struct LoadGalleryArgs {
+    pub path: String,
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Tool {
     Pen,
@@ -166,6 +194,70 @@ pub enum HistoryAction {
     },
 }
 
+const COMMON_ASPECT_RATIOS: &[((u32, u32), f64)] = &[
+    ((16, 9), 16.0 / 9.0),
+    ((16, 10), 16.0 / 10.0),
+    ((4, 3), 4.0 / 3.0),
+    ((3, 2), 3.0 / 2.0),
+    ((1, 1), 1.0),
+    ((9, 16), 9.0 / 16.0),
+    ((4, 5), 4.0 / 5.0),
+    ((3, 4), 3.0 / 4.0),
+    ((2, 3), 2.0 / 3.0),
+    ((21, 9), 21.0 / 9.0),
+];
+
+fn snap_crop_ratio(
+    mut min_x: f64,
+    mut min_y: f64,
+    mut max_x: f64,
+    mut max_y: f64,
+    handle: CropHandle,
+    total_w: f64,
+    total_h: f64,
+) -> (f64, f64, f64, f64, bool) {
+    let cur_w = max_x - min_x;
+    let cur_h = max_y - min_y;
+    if cur_w < 20.0 || cur_h < 20.0 {
+        return (min_x, min_y, max_x, max_y, false);
+    }
+    let cur_ratio = cur_w / cur_h;
+
+    let mut best_ratio = COMMON_ASPECT_RATIOS[0].1;
+    let mut min_diff = f64::MAX;
+
+    for &(_, target_ratio) in COMMON_ASPECT_RATIOS {
+        let diff = (cur_ratio - target_ratio).abs();
+        if diff < min_diff {
+            min_diff = diff;
+            best_ratio = target_ratio;
+        }
+    }
+
+    let expected_w = cur_h * best_ratio;
+    let expected_h = cur_w / best_ratio;
+
+    match handle {
+        CropHandle::Right | CropHandle::BottomRight | CropHandle::TopRight => {
+            let snapped_w = expected_w.min(total_w - min_x);
+            max_x = min_x + snapped_w;
+        }
+        CropHandle::Left | CropHandle::BottomLeft | CropHandle::TopLeft => {
+            let snapped_w = expected_w.min(max_x);
+            min_x = max_x - snapped_w;
+        }
+        CropHandle::Bottom => {
+            let snapped_h = expected_h.min(total_h - min_y);
+            max_y = min_y + snapped_h;
+        }
+        CropHandle::Top => {
+            let snapped_h = expected_h.min(max_y);
+            min_y = max_y - snapped_h;
+        }
+    }
+    (min_x, min_y, max_x, max_y, true)
+}
+
 fn calculate_aspect_ratio_str(w: f64, h: f64) -> String {
     let w_u = w.round() as u32;
     let h_u = h.round() as u32;
@@ -173,18 +265,7 @@ fn calculate_aspect_ratio_str(w: f64, h: f64) -> String {
         return String::new();
     }
     let ratio = w / h;
-    let known: &[((u32, u32), f64)] = &[
-        ((1, 1), 1.0),
-        ((16, 9), 16.0 / 9.0),
-        ((16, 10), 16.0 / 10.0),
-        ((4, 3), 4.0 / 3.0),
-        ((3, 2), 3.0 / 2.0),
-        ((21, 9), 21.0 / 9.0),
-        ((9, 16), 9.0 / 16.0),
-        ((3, 4), 3.0 / 4.0),
-        ((2, 3), 2.0 / 3.0),
-    ];
-    for &((rw, rh), val) in known {
+    for &((rw, rh), val) in COMMON_ASPECT_RATIOS {
         if (ratio - val).abs() < 0.035 {
             return format!("{} × {} · {}:{}", w_u, h_u, rw, rh);
         }
@@ -200,10 +281,10 @@ fn calculate_aspect_ratio_str(w: f64, h: f64) -> String {
     let g = gcd(w_u, h_u);
     let rw = w_u / g;
     let rh = h_u / g;
-    if rw < 50 && rh < 50 {
+    if rw <= 16 && rh <= 16 {
         format!("{} × {} · {}:{}", w_u, h_u, rw, rh)
     } else {
-        format!("{} × {} · {:.2}:1", w_u, h_u, ratio)
+        format!("{} × {}", w_u, h_u)
     }
 }
 
@@ -245,6 +326,18 @@ fn detect_color(text: &str) -> Option<String> {
     None
 }
 
+fn format_gallery_date(ts: u64) -> String {
+    if ts == 0 {
+        return String::new();
+    }
+    let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(ts as f64 * 1000.0));
+    let day = date.get_date();
+    let month = date.get_month() + 1;
+    let hours = date.get_hours();
+    let minutes = date.get_minutes();
+    format!("{:02}/{:02} {:02}:{:02}", day, month, hours, minutes)
+}
+
 #[component]
 pub fn App() -> impl IntoView {
     let (active_tool, set_active_tool) = signal(Tool::Pen);
@@ -253,8 +346,16 @@ pub fn App() -> impl IntoView {
     let (status_text, set_status_text) = signal(String::new());
     let (show_about, set_show_about) = signal(false);
     let (is_about_closing, set_is_about_closing) = signal(false);
+    let (show_gallery, set_show_gallery) = signal(false);
+    let (gallery_items, set_gallery_items) = signal(Vec::<GalleryItem>::new());
+    let (_gallery_total, set_gallery_total) = signal(0usize);
+    let (gallery_has_more, set_gallery_has_more) = signal(false);
+    let (is_gallery_loading, set_is_gallery_loading) = signal(false);
+    let (load_gallery_target, set_load_gallery_target) = signal(None::<(String, String)>);
+    let (selected_gallery_path, set_selected_gallery_path) = signal(Option::<String>::None);
     let (dimension_text, set_dimension_text) = signal(String::new());
     let (is_cropping_active, set_is_cropping_active) = signal(false);
+    let (is_crop_snapped, set_is_crop_snapped) = signal(false);
     let (picker_preview, set_picker_preview) = signal(None::<(f64, f64, String)>);
 
     let (is_pinned, set_is_pinned) = signal(false);
@@ -272,6 +373,7 @@ pub fn App() -> impl IntoView {
     let (can_clear, set_can_clear) = signal(false);
     let (is_panning_ui, set_is_panning_ui) = signal(false);
     let (toast_gen, set_toast_gen) = signal(0u32);
+    let (is_toast_closing, set_is_toast_closing) = signal(false);
     let (copy_success, set_copy_success) = signal(false);
     let (copy_success_gen, set_copy_success_gen) = signal(0u32);
     let (save_success, set_save_success) = signal(false);
@@ -299,11 +401,17 @@ pub fn App() -> impl IntoView {
     let notify = move |msg: String| {
         let gen = toast_gen.get_untracked().wrapping_add(1);
         set_toast_gen.set(gen);
+        set_is_toast_closing.set(false);
         set_status_text.set(msg);
         leptos::task::spawn_local(async move {
-            sleep_ms(2800).await;
+            sleep_ms(2400).await;
             if toast_gen.get_untracked() == gen {
-                set_status_text.set(String::new());
+                set_is_toast_closing.set(true);
+                sleep_ms(150).await;
+                if toast_gen.get_untracked() == gen {
+                    set_status_text.set(String::new());
+                    set_is_toast_closing.set(false);
+                }
             }
         });
     };
@@ -317,6 +425,10 @@ pub fn App() -> impl IntoView {
                 set_is_about_closing.set(false);
             });
         }
+    };
+
+    let close_gallery = move || {
+        set_show_gallery.set(false);
     };
 
     let draw_arrow_head = |ctx: &CanvasRenderingContext2d, from: &Point, to: &Point, width: f64| {
@@ -617,6 +729,84 @@ pub fn App() -> impl IntoView {
             notify(format!("Abriendo: {}", url));
         });
     };
+
+    let fetch_gallery = {
+        let set_gallery_items = set_gallery_items.clone();
+        let set_gallery_total = set_gallery_total.clone();
+        let set_gallery_has_more = set_gallery_has_more.clone();
+        let set_is_gallery_loading = set_is_gallery_loading.clone();
+        let gallery_items = gallery_items.clone();
+        Arc::new(move |offset: usize, append: bool| {
+            let set_gallery_items = set_gallery_items.clone();
+            let set_gallery_total = set_gallery_total.clone();
+            let set_gallery_has_more = set_gallery_has_more.clone();
+            let set_is_gallery_loading = set_is_gallery_loading.clone();
+            let gallery_items = gallery_items.clone();
+            set_is_gallery_loading.set(true);
+            leptos::task::spawn_local(async move {
+                let args = serde_wasm_bindgen::to_value(&GetGalleryArgs { offset, limit: 5 }).unwrap_or(JsValue::NULL);
+                if let Ok(val) = call_tauri("get_gallery_items", args).await {
+                    if let Ok(res) = serde_wasm_bindgen::from_value::<GalleryResponse>(val) {
+                        set_gallery_total.set(res.total);
+                        set_gallery_has_more.set(res.has_more);
+                        if append {
+                            let mut current = gallery_items.get_untracked();
+                            current.extend(res.items);
+                            set_gallery_items.set(current);
+                        } else {
+                            set_gallery_items.set(res.items);
+                        }
+                    }
+                }
+                set_is_gallery_loading.set(false);
+            });
+        })
+    };
+
+    let open_gallery = {
+        let fetch_gallery = fetch_gallery.clone();
+        let set_show_gallery = set_show_gallery.clone();
+        let gallery_items = gallery_items.clone();
+        Arc::new(move || {
+            let is_empty = gallery_items.get_untracked().is_empty();
+            set_show_gallery.set(true);
+            if is_empty {
+                fetch_gallery(0, false);
+            }
+        })
+    };
+
+    Effect::new({
+        let switch_image = switch_image.clone();
+        move |_| {
+            if let Some((path, filename)) = load_gallery_target.get() {
+                let switch_img = switch_image.clone();
+                leptos::task::spawn_local(async move {
+                    let args = serde_wasm_bindgen::to_value(&LoadGalleryArgs { path }).unwrap_or(JsValue::NULL);
+                    if let Ok(val) = call_tauri("load_gallery_image", args).await {
+                        if let Some(img_data_url) = val.as_string() {
+                            let img = HtmlImageElement::new().unwrap();
+                            let img_clone = img.clone();
+                            let switch_img_clone = switch_img.clone();
+                            let filename_clone = filename.clone();
+
+                            let onload = Closure::<dyn FnMut()>::wrap(Box::new(move || {
+                                let w = img_clone.natural_width();
+                                let h = img_clone.natural_height();
+                                switch_img_clone(img_clone.src(), w, h);
+                                notify(format!("Cargada: {}", filename_clone));
+                                close_gallery();
+                            }));
+
+                            img.set_onload(Some(onload.as_ref().unchecked_ref()));
+                            onload.forget();
+                            img.set_src(&img_data_url);
+                        }
+                    }
+                });
+            }
+        }
+    });
 
     let sort_ocr_blocks = |blocks: &[OcrBlock]| -> Vec<OcrBlock> {
         let mut sorted = blocks.to_vec();
@@ -999,6 +1189,13 @@ pub fn App() -> impl IntoView {
         e.prevent_default();
     });
 
+    Effect::new({
+        let fetch_gallery = fetch_gallery.clone();
+        move |_| {
+            fetch_gallery(0, false);
+        }
+    });
+
     let _ = window_event_listener(ev::keydown, {
         let undo = on_undo_action.clone();
         let redo = on_redo_action.clone();
@@ -1009,6 +1206,7 @@ pub fn App() -> impl IntoView {
         let copy_all_ocr = copy_all_ocr.clone();
         let copy_selected_ocr = copy_selected_ocr.clone();
         let set_selected_ocr_indices = set_selected_ocr_indices.clone();
+        let open_gallery_fn = open_gallery.clone();
         move |e: KeyboardEvent| {
             let key = e.key();
             let ctrl = e.ctrl_key() || e.meta_key();
@@ -1042,9 +1240,18 @@ pub fn App() -> impl IntoView {
                 e.prevent_default();
                 set_zoom_level.set(1.0);
                 set_pan_offset.set((0.0, 0.0));
+            } else if key == "Tab" {
+                e.prevent_default();
+                if show_gallery.get_untracked() {
+                    close_gallery();
+                } else {
+                    open_gallery_fn();
+                }
             } else if key == "Escape" {
                 e.prevent_default();
-                if show_about.get_untracked() {
+                if show_gallery.get_untracked() {
+                    close_gallery();
+                } else if show_about.get_untracked() {
                     close_about();
                 } else if !selected_ocr_indices.get_untracked().is_empty() {
                     set_selected_ocr_indices.set(BTreeSet::new());
@@ -1126,6 +1333,9 @@ pub fn App() -> impl IntoView {
     let on_wheel = {
         let canvas_ref = canvas_ref.clone();
         move |ev: WheelEvent| {
+            if show_gallery.get_untracked() || show_about.get_untracked() {
+                return;
+            }
             ev.prevent_default();
             let current_zoom = zoom_level.get_untracked();
             let delta = ev.delta_y();
@@ -1614,6 +1824,12 @@ pub fn App() -> impl IntoView {
                         }
                     }
 
+                    let (min_x, min_y, max_x, max_y, is_snapped) = if ev.shift_key() {
+                        snap_crop_ratio(min_x, min_y, max_x, max_y, handle, total_w, total_h)
+                    } else {
+                        (min_x, min_y, max_x, max_y, false)
+                    };
+                    set_is_crop_snapped.set(is_snapped);
                     let crop_w = (max_x - min_x).max(20.0);
                     let crop_h = (max_y - min_y).max(20.0);
                     *current_crop_rect.borrow_mut() = Rect { x: min_x, y: min_y, w: crop_w, h: crop_h };
@@ -1635,9 +1851,28 @@ pub fn App() -> impl IntoView {
                         ctx.fill_rect(0.0, min_y, min_x, crop_h);
                         ctx.fill_rect(min_x + crop_w, min_y, total_w - (min_x + crop_w), crop_h);
 
-                        ctx.set_stroke_style_str("rgba(255, 255, 255, 0.9)");
-                        ctx.set_line_width(1.5);
-                        ctx.stroke_rect(min_x, min_y, crop_w, crop_h);
+                        if is_snapped {
+                            ctx.set_stroke_style_str("#bef264");
+                            ctx.set_line_width(2.0);
+                            ctx.stroke_rect(min_x, min_y, crop_w, crop_h);
+
+                            ctx.set_stroke_style_str("rgba(190, 242, 100, 0.4)");
+                            ctx.set_line_width(1.0);
+                            ctx.begin_path();
+                            ctx.move_to(min_x + crop_w / 3.0, min_y);
+                            ctx.line_to(min_x + crop_w / 3.0, min_y + crop_h);
+                            ctx.move_to(min_x + crop_w * 2.0 / 3.0, min_y);
+                            ctx.line_to(min_x + crop_w * 2.0 / 3.0, min_y + crop_h);
+                            ctx.move_to(min_x, min_y + crop_h / 3.0);
+                            ctx.line_to(min_x + crop_w, min_y + crop_h / 3.0);
+                            ctx.move_to(min_x, min_y + crop_h * 2.0 / 3.0);
+                            ctx.line_to(min_x + crop_w, min_y + crop_h * 2.0 / 3.0);
+                            ctx.stroke();
+                        } else {
+                            ctx.set_stroke_style_str("rgba(255, 255, 255, 0.9)");
+                            ctx.set_line_width(1.5);
+                            ctx.stroke_rect(min_x, min_y, crop_w, crop_h);
+                        }
                         ctx.restore();
                     }
                 }
@@ -1659,6 +1894,7 @@ pub fn App() -> impl IntoView {
             if crop_handle_state.borrow().is_some() {
                 *crop_handle_state.borrow_mut() = None;
                 set_is_cropping_active.set(false);
+                set_is_crop_snapped.set(false);
 
                 let rect = current_crop_rect.borrow().clone();
                 if let Some(canvas) = canvas_ref.get() {
@@ -1740,7 +1976,7 @@ pub fn App() -> impl IntoView {
                         view! {
                             <button
                                 class=move || format!(
-                                    "w-8 h-8 rounded-lg bg-zinc-900 border border-white/10 transition-all duration-150 flex items-center justify-center cursor-pointer active:scale-95 shadow-xl {}",
+                                    "w-8 h-8 rounded-lg bg-zinc-900 border border-white/10 transition-all duration-150 flex items-center justify-center cursor-pointer shadow-xl {}",
                                     if is_pinned.get() { "text-zinc-100 bg-white/15 border-white/25" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
                                 )
                                 aria-label=move || if is_pinned.get() { "Desfijar ventana" } else { "Fijar ventana siempre visible" }
@@ -1771,7 +2007,7 @@ pub fn App() -> impl IntoView {
                 }}
 
                 <button
-                    class="w-8 h-8 rounded-lg bg-zinc-900 border border-white/10 text-zinc-400 hover:text-red-400 hover:bg-white/5 transition-all duration-150 flex items-center justify-center cursor-pointer active:scale-95 shadow-xl"
+                    class="w-8 h-8 rounded-lg bg-zinc-900 border border-white/10 text-zinc-400 hover:text-red-400 hover:bg-white/5 transition-all duration-150 flex items-center justify-center cursor-pointer shadow-xl"
                     aria-label="Cerrar"
                     on:click=on_close
                 >
@@ -1790,7 +2026,7 @@ pub fn App() -> impl IntoView {
                         if !is_tiling.get() {
                             view! {
                                 <div
-                                    class="w-8.5 h-8.5 rounded-lg text-zinc-400 hover:text-zinc-200 flex items-center justify-center cursor-grab active:cursor-grabbing hover:bg-white/5 transition-all duration-150"
+                                    class="w-8.5 h-8.5 rounded-lg text-zinc-400 hover:text-zinc-200 flex items-center justify-center cursor-grab hover:bg-white/5 transition-colors duration-150"
                                     data-tauri-drag-region
                                 >
                                     <svg class="w-[18px] h-[18px] pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -1812,6 +2048,31 @@ pub fn App() -> impl IntoView {
                         }
                     }}
 
+                    <div class="relative tooltip-trigger w-full flex items-center justify-center">
+                        <button
+                            class=move || {
+                                let is_active = is_cropping_active.get();
+                                format!(
+                                    "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer {}",
+                                    if is_active { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
+                                )
+                            }
+                            aria-label="Ajustar recorte"
+                            on:click=move |_| {
+                                let cur = is_cropping_active.get();
+                                set_is_cropping_active.set(!cur);
+                            }
+                        >
+                            <svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M6 2v14a2 2 0 0 0 2 2h14" />
+                                <path d="M18 22V8a2 2 0 0 0-2-2H2" />
+                            </svg>
+                        </button>
+                        <div class="sidebar-tooltip px-2 py-1 bg-zinc-900 border border-white/10 text-zinc-200 text-[11px] font-medium rounded-lg shadow-xl">
+                            "Ajustar recorte"
+                        </div>
+                    </div>
+
                     <div class="accordion-group">
                         <div class="relative tooltip-trigger w-full flex items-center justify-center">
                             <button
@@ -1819,7 +2080,7 @@ pub fn App() -> impl IntoView {
                                     let t = active_tool.get();
                                     let is_act = !is_ocr_active.get() && t == Tool::Pen;
                                     format!(
-                                        "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer active:scale-95 {}",
+                                        "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer {}",
                                         if is_act { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
                                     )
                                 }
@@ -1848,7 +2109,7 @@ pub fn App() -> impl IntoView {
                                             let t = active_tool.get();
                                             let is_act = !is_ocr_active.get() && t == Tool::Highlighter;
                                             format!(
-                                                "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer active:scale-95 {}",
+                                                "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer {}",
                                                 if is_act { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
                                             )
                                         }
@@ -1878,7 +2139,7 @@ pub fn App() -> impl IntoView {
                                     let t = active_tool.get();
                                     let is_act = !is_ocr_active.get() && t == Tool::Rectangle;
                                     format!(
-                                        "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer active:scale-95 {}",
+                                        "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer {}",
                                         if is_act { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
                                     )
                                 }
@@ -1906,7 +2167,7 @@ pub fn App() -> impl IntoView {
                                             let t = active_tool.get();
                                             let is_act = !is_ocr_active.get() && t == Tool::Arrow;
                                             format!(
-                                                "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer active:scale-95 {}",
+                                                "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer {}",
                                                 if is_act { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
                                             )
                                         }
@@ -1933,7 +2194,7 @@ pub fn App() -> impl IntoView {
                                             let t = active_tool.get();
                                             let is_act = !is_ocr_active.get() && t == Tool::Circle;
                                             format!(
-                                                "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer active:scale-95 {}",
+                                                "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer {}",
                                                 if is_act { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
                                             )
                                         }
@@ -1964,7 +2225,7 @@ pub fn App() -> impl IntoView {
                                 let t = active_tool.get();
                                 let is_act = !is_ocr_active.get() && t == Tool::Blur;
                                 format!(
-                                    "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer active:scale-95 {}",
+                                    "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer {}",
                                     if is_act { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
                                 )
                             }
@@ -1993,7 +2254,7 @@ pub fn App() -> impl IntoView {
                                 let t = active_tool.get();
                                 let is_act = !is_ocr_active.get() && t == Tool::Picker;
                                 format!(
-                                    "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer active:scale-95 {}",
+                                    "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer {}",
                                     if is_act { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
                                 )
                             }
@@ -2017,7 +2278,7 @@ pub fn App() -> impl IntoView {
                         <button
                             class=move || {
                                 format!(
-                                    "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer active:scale-95 relative {}",
+                                    "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer relative {}",
                                     if is_ocr_active.get() { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
                                 )
                             }
@@ -2027,7 +2288,7 @@ pub fn App() -> impl IntoView {
                             <div class="relative flex items-center justify-center">
                                 <svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                                     <path d="M11 20C7.25027 20 5.3754 20 4.06107 19.0451C3.6366 18.7367 3.26331 18.3634 2.95491 17.9389C2 16.6246 2 14.7497 2 11C2 7.25027 2 5.3754 2.95491 4.06107C3.26331 3.6366 3.26331 3.26331 4.06107 2.95491C5.3754 2 7.25027 2 11 2H11.5C14.7734 2 16.4101 2 17.6125 2.7368C18.2853 3.14908 18.8509 3.71473 19.2632 4.38751C20 5.58985 20 7.22657 20 10.5" />
-                                    <path d="M17.4069 14.4036C17.6192 13.8655 18.3808 13.8655 18.5931 14.4036L18.6298 14.4969C19.1482 15.8113 20.1887 16.8518 21.5031 17.3702L21.5964 17.4069C22.1345 17.6192 22.1345 18.3808 21.5964 18.5931L21.5031 18.6298C20.1887 19.1482 19.1482 20.1887 18.6298 21.5031L18.5931 21.5964C18.3808 22.1345 17.6192 22.1345 17.4069 21.5964L17.3702 21.5031C16.8518 20.1887 15.8113 19.1482 14.4969 18.6298L14.4036 18.5931C13.8655 18.3808 13.8655 17.6192 14.4036 17.4069L14.4969 17.3702C15.8113 16.8518 16.8518 15.8113 17.3702 14.4969L17.4069 14.4036Z" />
+                                    <path d="M17.4069 14.4036C17.6192 13.8655 18.3808 13.8655 18.5931 14.4036L18.6298 14.4969C19.1482 15.8113 20.1887 16.8518 21.5031 17.3702L21.5964 17.4069C22.1345 17.6192 22.1345 18.3808 21.5964 18.5931L21.5031 18.6298C20.1887 19.1482 19.1482 20.1887 18.6298 21.5031L18.5931 21.5964C18.3808 22.1345 17.6192 22.1345 17.4069 21.5964L17.3702 21.5031C16.8518 20.1887 16.8518 15.8113 17.3702 14.4969L17.4069 14.4036Z" />
                                     <path d="M11 7H7V8M11 7H15V8M11 7V15M11 15H10M11 15H12" />
                                 </svg>
                                 {move || if is_ocr_loading.get() {
@@ -2049,7 +2310,7 @@ pub fn App() -> impl IntoView {
                     <div class="accordion-group-colors">
                         <div class="relative tooltip-trigger w-full flex items-center justify-center">
                             <button
-                                class="w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer active:scale-95 hover:bg-white/5"
+                                class="w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer hover:bg-white/5"
                                 aria-label="Color y grosor"
                             >
                                 <span
@@ -2079,8 +2340,8 @@ pub fn App() -> impl IntoView {
                                             <button
                                                 class=move || {
                                                     format!(
-                                                        "w-3.5 h-3.5 rounded-full transition-all duration-150 cursor-pointer border border-white/15 flex items-center justify-center {}",
-                                                        if is_active() { "ring-2 ring-white scale-110" } else { "hover:scale-110 opacity-80 hover:opacity-100" }
+                                                        "w-3.5 h-3.5 rounded-full transition-colors duration-150 cursor-pointer border border-white/15 flex items-center justify-center {}",
+                                                        if is_active() { "ring-2 ring-white" } else { "opacity-80 hover:opacity-100" }
                                                     )
                                                 }
                                                 style=format!("background-color: {}", c_hex)
@@ -2100,7 +2361,7 @@ pub fn App() -> impl IntoView {
                                         view! {
                                             <button
                                                 class=move || format!(
-                                                    "w-full flex items-center justify-center py-1 px-1.5 rounded transition-all duration-150 cursor-pointer {}",
+                                                    "w-full flex items-center justify-center py-1 px-1.5 rounded transition-colors duration-150 cursor-pointer {}",
                                                     if is_active() { "bg-white/20 text-white" } else { "text-zinc-500 hover:text-zinc-200 hover:bg-white/5" }
                                                 )
                                                 aria-label=format!("Grosor {}px", width_val)
@@ -2120,7 +2381,7 @@ pub fn App() -> impl IntoView {
                     <div class="relative tooltip-trigger w-full flex items-center justify-center">
                         <button
                             class=move || format!(
-                                "w-8.5 h-8.5 rounded-lg transition-all duration-150 flex items-center justify-center active:scale-95 {}",
+                                "w-8.5 h-8.5 rounded-lg transition-colors duration-150 flex items-center justify-center {}",
                                 if can_undo.get() { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5 cursor-pointer" } else { "text-zinc-600 cursor-not-allowed" }
                             )
                             aria-label="Deshacer (Ctrl+Z)"
@@ -2140,7 +2401,7 @@ pub fn App() -> impl IntoView {
                     <div class="relative tooltip-trigger w-full flex items-center justify-center">
                         <button
                             class=move || format!(
-                                "w-8.5 h-8.5 rounded-lg transition-all duration-150 flex items-center justify-center active:scale-95 {}",
+                                "w-8.5 h-8.5 rounded-lg transition-colors duration-150 flex items-center justify-center {}",
                                 if can_redo.get() { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5 cursor-pointer" } else { "text-zinc-600 cursor-not-allowed" }
                             )
                             aria-label="Rehacer (Ctrl+Y)"
@@ -2160,7 +2421,7 @@ pub fn App() -> impl IntoView {
                     <div class="relative tooltip-trigger w-full flex items-center justify-center">
                         <button
                             class=move || format!(
-                                "w-8.5 h-8.5 rounded-lg transition-all duration-150 flex items-center justify-center active:scale-95 {}",
+                                "w-8.5 h-8.5 rounded-lg transition-colors duration-150 flex items-center justify-center {}",
                                 if can_clear.get() { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5 cursor-pointer" } else { "text-zinc-600 cursor-not-allowed" }
                             )
                             aria-label="Limpiar lienzo"
@@ -2184,7 +2445,7 @@ pub fn App() -> impl IntoView {
                     <div class="relative tooltip-trigger w-full flex items-center justify-center">
                         <button
                             class=move || format!(
-                                "w-8.5 h-8.5 rounded-lg transition-all duration-150 flex items-center justify-center cursor-pointer active:scale-95 {}",
+                                "w-8.5 h-8.5 rounded-lg transition-colors duration-150 flex items-center justify-center cursor-pointer {}",
                                 if copy_success.get() { "text-zinc-100 bg-white/15" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
                             )
                             aria-label="Copiar imagen (Ctrl+C)"
@@ -2216,7 +2477,7 @@ pub fn App() -> impl IntoView {
                     <div class="relative tooltip-trigger w-full flex items-center justify-center">
                         <button
                             class=move || format!(
-                                "w-8.5 h-8.5 rounded-lg transition-all duration-150 flex items-center justify-center cursor-pointer active:scale-95 {}",
+                                "w-8.5 h-8.5 rounded-lg transition-colors duration-150 flex items-center justify-center cursor-pointer {}",
                                 if save_success.get() { "text-zinc-100 bg-white/15" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
                             )
                             aria-label="Guardar archivo (Ctrl+S)"
@@ -2246,7 +2507,28 @@ pub fn App() -> impl IntoView {
 
                     <div class="relative tooltip-trigger w-full flex items-center justify-center">
                         <button
-                            class="w-8.5 h-8.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-white/5 transition-all duration-150 flex items-center justify-center cursor-pointer active:scale-95"
+                            class=move || format!(
+                                "w-8.5 h-8.5 rounded-lg transition-colors duration-150 flex items-center justify-center cursor-pointer {}",
+                                if show_gallery.get() { "text-zinc-100 bg-white/15" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
+                            )
+                            aria-label="Snapshots recientes (Tab)"
+                            on:click=move |_| open_gallery()
+                        >
+                            <svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M17.5 5.73041V6.29128M17.7801 6.00085H17.25M18 6.00085C18 6.277 17.7761 6.50085C17.5 6.50085C17.2239 6.50085 17 6.277 17 6.00085C17 5.72471 17.2239 5.50085 17.5 5.50085C17.7761 5.50085 18 5.72471 18 6.00085Z" />
+                                <path d="M9.5 7.99945C9.5 5.17102 9.5 3.75681 10.3787 2.87813C11.2574 1.99945 12.6716 1.99945 15.5 1.99945C18.3284 1.99945 19.7426 1.99945 20.6213 2.87813C21.5 3.75681 21.5 5.17102 21.5 7.99945V11.9995C21.5 14.8279 21.5 16.2421 20.6213 17.1208C19.7426 17.9995 18.3284 17.9995 15.5 17.9995C12.6716 17.9995 11.2574 17.9995 10.3787 17.1208C9.5 16.2421 9.5 14.8279 9.5 11.9995V7.99945Z" />
+                                <path d="M6.62279 5.99878C4.49094 6.58122 3.36407 6.978 2.81621 7.92692C2.19489 9.00308 2.56092 10.3691 3.29297 13.1012L4.32825 16.9649C5.0603 19.6969 5.42632 21.0629 6.50248 21.6843C7.57864 22.3056 8.94467 21.9396 11.6767 21.2075C12.1593 21.0782 12.5992 20.9603 13 20.8479" />
+                                <path d="M9.5 13.9995L12.8693 10.6301C13.2731 10.2263 13.8208 9.99945 14.3919 9.99945C15.0873 9.99945 15.7399 10.3353 16.1441 10.9011L20.5 16.9995" />
+                            </svg>
+                        </button>
+                        <div class="sidebar-tooltip px-2 py-1 bg-zinc-900 border border-white/10 text-zinc-200 text-[11px] font-medium rounded-lg shadow-xl">
+                            "Snapshots recientes · Tab"
+                        </div>
+                    </div>
+
+                    <div class="relative tooltip-trigger w-full flex items-center justify-center">
+                        <button
+                            class="w-8.5 h-8.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-white/5 transition-colors duration-150 flex items-center justify-center cursor-pointer"
                             aria-label="Acerca de Glint"
                             on:click=move |_| set_show_about.set(true)
                         >
@@ -2400,56 +2682,56 @@ pub fn App() -> impl IntoView {
                     }}
 
                     <div
-                        class="absolute -top-[2px] -left-[2px] w-3.5 h-3.5 border-t-2 border-l-2 border-white/80 hover:border-white rounded-tl cursor-nwse-resize z-30 transition-all hover:scale-125 shadow-xs opacity-0 group-hover:opacity-100"
+                        class="absolute -top-[2px] -left-[2px] w-3.5 h-3.5 border-t-2 border-l-2 border-white/80 hover:border-white rounded-tl cursor-nwse-resize z-30 transition-colors shadow-xs opacity-0 group-hover:opacity-100"
                         on:mousedown={
                             let s = start_crop_drag.clone();
                             move |e| s(CropHandle::TopLeft, e)
                         }
                     />
                     <div
-                        class="absolute -top-[2px] left-1/2 -translate-x-1/2 w-5 h-[2.5px] bg-white/70 hover:bg-white rounded-full cursor-ns-resize z-30 transition-all hover:scale-125 shadow-xs opacity-0 group-hover:opacity-100"
+                        class="absolute -top-[2px] left-1/2 -translate-x-1/2 w-5 h-[2.5px] bg-white/70 hover:bg-white rounded-full cursor-ns-resize z-30 transition-colors shadow-xs opacity-0 group-hover:opacity-100"
                         on:mousedown={
                             let s = start_crop_drag.clone();
                             move |e| s(CropHandle::Top, e)
                         }
                     />
                     <div
-                        class="absolute -top-[2px] -right-[2px] w-3.5 h-3.5 border-t-2 border-r-2 border-white/80 hover:border-white rounded-tr cursor-nesw-resize z-30 transition-all hover:scale-125 shadow-xs opacity-0 group-hover:opacity-100"
+                        class="absolute -top-[2px] -right-[2px] w-3.5 h-3.5 border-t-2 border-r-2 border-white/80 hover:border-white rounded-tr cursor-nesw-resize z-30 transition-colors shadow-xs opacity-0 group-hover:opacity-100"
                         on:mousedown={
                             let s = start_crop_drag.clone();
                             move |e| s(CropHandle::TopRight, e)
                         }
                     />
                     <div
-                        class="absolute top-1/2 -right-[2px] -translate-y-1/2 w-[2.5px] h-5 bg-white/70 hover:bg-white rounded-full cursor-ew-resize z-30 transition-all hover:scale-125 shadow-xs opacity-0 group-hover:opacity-100"
+                        class="absolute top-1/2 -right-[2px] -translate-y-1/2 w-[2.5px] h-5 bg-white/70 hover:bg-white rounded-full cursor-ew-resize z-30 transition-colors shadow-xs opacity-0 group-hover:opacity-100"
                         on:mousedown={
                             let s = start_crop_drag.clone();
                             move |e| s(CropHandle::Right, e)
                         }
                     />
                     <div
-                        class="absolute -bottom-[2px] -right-[2px] w-3.5 h-3.5 border-b-2 border-r-2 border-white/80 hover:border-white rounded-br cursor-nwse-resize z-30 transition-all hover:scale-125 shadow-xs opacity-0 group-hover:opacity-100"
+                        class="absolute -bottom-[2px] -right-[2px] w-3.5 h-3.5 border-b-2 border-r-2 border-white/80 hover:border-white rounded-br cursor-nwse-resize z-30 transition-colors shadow-xs opacity-0 group-hover:opacity-100"
                         on:mousedown={
                             let s = start_crop_drag.clone();
                             move |e| s(CropHandle::BottomRight, e)
                         }
                     />
                     <div
-                        class="absolute -bottom-[2px] left-1/2 -translate-x-1/2 w-5 h-[2.5px] bg-white/70 hover:bg-white rounded-full cursor-ns-resize z-30 transition-all hover:scale-125 shadow-xs opacity-0 group-hover:opacity-100"
+                        class="absolute -bottom-[2px] left-1/2 -translate-x-1/2 w-5 h-[2.5px] bg-white/70 hover:bg-white rounded-full cursor-ns-resize z-30 transition-colors shadow-xs opacity-0 group-hover:opacity-100"
                         on:mousedown={
                             let s = start_crop_drag.clone();
                             move |e| s(CropHandle::Bottom, e)
                         }
                     />
                     <div
-                        class="absolute -bottom-[2px] -left-[2px] w-3.5 h-3.5 border-b-2 border-l-2 border-white/80 hover:border-white rounded-bl cursor-nesw-resize z-30 transition-all hover:scale-125 shadow-xs opacity-0 group-hover:opacity-100"
+                        class="absolute -bottom-[2px] -left-[2px] w-3.5 h-3.5 border-b-2 border-l-2 border-white/80 hover:border-white rounded-bl cursor-nesw-resize z-30 transition-colors shadow-xs opacity-0 group-hover:opacity-100"
                         on:mousedown={
                             let s = start_crop_drag.clone();
                             move |e| s(CropHandle::BottomLeft, e)
                         }
                     />
                     <div
-                        class="absolute top-1/2 -left-[2px] -translate-y-1/2 w-[2.5px] h-5 bg-white/70 hover:bg-white rounded-full cursor-ew-resize z-30 transition-all hover:scale-125 shadow-xs opacity-0 group-hover:opacity-100"
+                        class="absolute top-1/2 -left-[2px] -translate-y-1/2 w-[2.5px] h-5 bg-white/70 hover:bg-white rounded-full cursor-ew-resize z-30 transition-colors shadow-xs opacity-0 group-hover:opacity-100"
                         on:mousedown={
                             let s = start_crop_drag.clone();
                             move |e| s(CropHandle::Left, e)
@@ -2459,11 +2741,13 @@ pub fn App() -> impl IntoView {
                     {move || {
                         let dt = dimension_text.get();
                         let active = is_cropping_active.get();
+                        let snapped = is_crop_snapped.get();
                         if !dt.is_empty() {
                             view! {
                                 <div class=move || {
                                     format!(
-                                        "absolute -bottom-7 left-1/2 -translate-x-1/2 bg-zinc-900 text-zinc-300 border border-white/10 px-2.5 py-0.5 rounded-lg text-[10px] font-mono shadow-xl pointer-events-none transition-opacity duration-200 {}",
+                                        "absolute -bottom-7 left-1/2 -translate-x-1/2 bg-zinc-900 {} border border-white/10 px-2.5 py-0.5 rounded-lg text-[10px] font-mono shadow-xl pointer-events-none transition-all duration-150 {}",
+                                        if snapped { "text-[#bef264] ring-1 ring-[#bef264]/40" } else { "text-zinc-300" },
                                         if active { "opacity-100 ring-1 ring-white/30" } else { "opacity-0 group-hover:opacity-90" }
                                     )
                                 }>
@@ -2481,7 +2765,7 @@ pub fn App() -> impl IntoView {
                     if z > 1.05 {
                         view! {
                             <button
-                                class="absolute top-4 left-20 bg-zinc-900 text-zinc-200 border border-white/15 px-2.5 py-1 rounded-lg text-[11px] font-mono shadow-xl hover:bg-zinc-800 cursor-pointer active:scale-95 flex items-center gap-1.5 z-40 transition-all"
+                                class="absolute top-4 left-20 bg-zinc-900 text-zinc-200 border border-white/15 px-2.5 py-1 rounded-lg text-[11px] font-mono shadow-xl hover:bg-zinc-800 cursor-pointer flex items-center gap-1.5 z-40 transition-colors"
                                 aria-label="Restablecer zoom (Ctrl+0)"
                                 on:click=reset_zoom
                             >
@@ -2531,11 +2815,15 @@ pub fn App() -> impl IntoView {
 
                 {move || {
                     let st = status_text.get();
+                    let closing = is_toast_closing.get();
                     if !st.is_empty() {
                         view! {
-                            <div class="absolute top-3 left-1/2 -translate-x-1/2 bg-zinc-900 text-zinc-100 border border-white/10 px-3.5 py-1.5 rounded-lg text-xs font-medium shadow-2xl flex items-center gap-2 animate-toast z-50 pointer-events-none">
+                            <div class=move || format!(
+                                "absolute top-3 left-1/2 bg-zinc-900 text-zinc-100 border border-white/10 px-3.5 py-1.5 rounded-lg text-xs font-medium shadow-2xl flex items-center gap-2 z-50 pointer-events-none {}",
+                                if closing { "animate-toast-exit" } else { "animate-toast" }
+                            )>
                                 <span class="w-1.5 h-1.5 rounded-full bg-[#98c379] animate-pulse"></span>
-                                {st}
+                                {st.clone()}
                             </div>
                         }.into_any()
                     } else {
@@ -2599,7 +2887,7 @@ pub fn App() -> impl IntoView {
                                         let c_sel_btn = copy_selected_ocr.clone();
                                         view! {
                                             <button
-                                                class="px-2.5 py-1 text-[11px] font-medium rounded-md bg-[#98c379] text-zinc-950 hover:bg-[#8ab56b] transition-colors cursor-pointer flex items-center gap-1 shadow-xs active:scale-95 animate-dropdown"
+                                                class="px-2.5 py-1 text-[11px] font-medium rounded-md bg-[#98c379] text-zinc-950 hover:bg-[#8ab56b] transition-colors cursor-pointer flex items-center gap-1 shadow-xs animate-dropdown"
                                                 on:click=move |_| c_sel_btn()
                                             >
                                                 <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -2613,7 +2901,7 @@ pub fn App() -> impl IntoView {
                                         let c_all_btn = copy_all_ocr.clone();
                                         view! {
                                             <button
-                                                class="px-2.5 py-1 text-[11px] font-medium rounded-md bg-white/10 text-zinc-300 hover:bg-white/20 hover:text-white transition-colors cursor-pointer flex items-center gap-1 shadow-xs active:scale-95"
+                                                class="px-2.5 py-1 text-[11px] font-medium rounded-md bg-white/10 text-zinc-300 hover:bg-white/20 hover:text-white transition-colors cursor-pointer flex items-center gap-1 shadow-xs"
                                                 on:click=move |_| c_all_btn()
                                             >
                                                 "Copiar todo"
@@ -2709,129 +2997,267 @@ pub fn App() -> impl IntoView {
                     view! { <span></span> }.into_any()
                 }}
 
+                <div
+                    class=move || {
+                        let is_open = show_gallery.get();
+                        format!(
+                            "fixed left-18 top-2.5 bottom-2.5 w-80 max-w-[calc(100vw-5.5rem)] bg-zinc-900 border border-white/10 rounded-lg shadow-2xl p-3.5 z-40 flex flex-col gap-3 ring-1 ring-white/5 select-none transition-all duration-200 ease-out will-change-transform will-change-opacity {}",
+                            if is_open {
+                                "opacity-100 translate-x-0 pointer-events-auto"
+                            } else {
+                                "opacity-0 -translate-x-4 pointer-events-none"
+                            }
+                        )
+                    }
+                    on:click=move |e| e.stop_propagation()
+                    on:wheel=move |e| e.stop_propagation()
+                >
+                    <div class="flex items-center justify-between shrink-0 pb-2 border-b border-white/10">
+                        <div class="flex items-center gap-2">
+                            <svg class="w-4 h-4 text-[#bef264]" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 2L14.4 9.6L22 12L14.4 14.4L12 22L9.6 14.4L2 12L9.6 9.6L12 2Z" />
+                            </svg>
+                            <h2 class="text-xs font-semibold text-zinc-100 tracking-tight">"Snapshots"</h2>
+                        </div>
+                        <div class="flex items-center gap-1">
+                            <button
+                                class="text-zinc-400 hover:text-[#bef264] p-1 rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
+                                aria-label="Actualizar capturas"
+                                on:click={
+                                    let f = fetch_gallery.clone();
+                                    move |_| f(0, false)
+                                }
+                            >
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                                    <path d="M3 3v5h5" />
+                                    <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                                    <path d="M16 21h5v-5" />
+                                </svg>
+                            </button>
+                            <button
+                                class="text-zinc-400 hover:text-zinc-100 p-1 rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
+                                aria-label="Cerrar panel de snapshots"
+                                on:click=move |_| close_gallery()
+                            >
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M18 6L12 12M12 12L6 18M12 12L18 18M12 12L6 6" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div
+                        class="flex-1 overflow-y-auto px-0.5 py-0.5 flex flex-col gap-2.5 no-scrollbar"
+                        on:wheel=move |e| e.stop_propagation()
+                    >
+                        {move || {
+                            let items_list = gallery_items.get();
+                            let is_loading = is_gallery_loading.get();
+                            let has_more = gallery_has_more.get();
+                            let fetch_more = fetch_gallery.clone();
+                            let items_len = items_list.len();
+
+                            if items_list.is_empty() {
+                                if is_loading {
+                                    view! {
+                                        <div class="flex flex-col gap-2.5">
+                                            {(0..3).map(|i| {
+                                                view! {
+                                                    <div
+                                                        class="aspect-video w-full rounded-lg bg-zinc-950 border border-white/10 animate-skeleton"
+                                                        style=format!("animation-delay: {}ms;", i * 60)
+                                                    />
+                                                }
+                                            }).collect_view()}
+                                        </div>
+                                    }.into_any()
+                                } else {
+                                    view! {
+                                        <div class="h-full flex flex-col items-center justify-center gap-2 text-zinc-400 text-xs text-center py-12">
+                                            <svg class="w-7 h-7 text-zinc-600 mb-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                                <path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" stroke-linecap="round" stroke-linejoin="round" />
+                                            </svg>
+                                            <p class="font-medium text-zinc-300 text-xs">"Sin capturas en el historial"</p>
+                                            <p class="text-[11px] text-zinc-500 max-w-[200px]">"Las capturas que tomes se indexarán aquí automáticamente."</p>
+                                        </div>
+                                    }.into_any()
+                                }
+                            } else {
+                                view! {
+                                    <div class="flex flex-col gap-2.5">
+                                        {items_list.into_iter().enumerate().map(|(idx, item)| {
+                                            let item_clone = item.clone();
+                                            let item_path = item.path.clone();
+                                            let date_formatted = format_gallery_date(item.timestamp);
+                                            let dim_label = if item.width > 0 && item.height > 0 {
+                                                format!("{}×{}", item.width, item.height)
+                                            } else {
+                                                String::new()
+                                            };
+                                            let delay_ms = (idx % 6) * 35;
+                                            let p_card = item_path.clone();
+
+                                            view! {
+                                                <div
+                                                    class=move || {
+                                                        let is_active = selected_gallery_path.get().as_deref() == Some(&p_card);
+                                                        format!(
+                                                            "group rounded-lg overflow-hidden cursor-pointer bg-zinc-950 border transition-colors duration-150 flex flex-col shadow-sm {}",
+                                                            if is_active {
+                                                                "border-[#bef264]"
+                                                            } else {
+                                                                "border-white/10 hover:border-[#bef264]/60 hover:bg-zinc-900/80"
+                                                            }
+                                                        )
+                                                    }
+                                                    style=format!("animation-delay: {}ms;", delay_ms)
+                                                    on:click={
+                                                        let p = item_clone.path.clone();
+                                                        let f = item_clone.filename.clone();
+                                                        move |_| {
+                                                            set_selected_gallery_path.set(Some(p.clone()));
+                                                            set_load_gallery_target.set(Some((p.clone(), f.clone())));
+                                                        }
+                                                    }
+                                                >
+                                                    <div class="aspect-video w-full relative overflow-hidden bg-black/50">
+                                                        <img
+                                                            src=item.preview_base64
+                                                            alt=item.filename.clone()
+                                                            class="w-full h-full object-cover select-none pointer-events-none"
+                                                        />
+                                                    </div>
+
+                                                    <div class="p-2 bg-zinc-950 flex items-center justify-between gap-2 border-t border-white/5">
+                                                        <div class="flex flex-col min-w-0 pr-1">
+                                                            <span class="text-[11px] font-medium text-zinc-200 truncate">
+                                                                {item.filename}
+                                                            </span>
+                                                            <span class="text-[9.5px] text-zinc-500 font-mono">
+                                                                {if !dim_label.is_empty() {
+                                                                    format!("{} · {}", dim_label, date_formatted)
+                                                                } else {
+                                                                    date_formatted
+                                                                }}
+                                                            </span>
+                                                        </div>
+                                                        <span class="shrink-0 text-[10px] text-[#bef264] px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity font-medium">
+                                                            "Cargar"
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            }
+                                        }).collect_view()}
+
+                                        {if has_more {
+                                            let f_more = fetch_more.clone();
+                                            view! {
+                                                <button
+                                                    class="w-full py-2 rounded-lg bg-zinc-950 hover:bg-zinc-800 text-zinc-300 hover:text-zinc-100 text-xs font-medium border border-white/10 transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                                                    disabled=is_loading
+                                                    on:click=move |_| f_more(items_len, true)
+                                                >
+                                                    {if is_loading {
+                                                        view! {
+                                                            <span class="flex items-center gap-2">
+                                                                <svg class="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                                    <circle cx="12" cy="12" r="10" stroke-opacity="0.25" />
+                                                                    <path d="M12 2a10 10 0 0 1 10 10" />
+                                                                </svg>
+                                                                "Cargando..."
+                                                            </span>
+                                                        }.into_any()
+                                                    } else {
+                                                        view! {
+                                                            <span>"Más capturas"</span>
+                                                        }.into_any()
+                                                    }}
+                                                </button>
+                                            }.into_any()
+                                        } else {
+                                            view! { <span></span> }.into_any()
+                                        }}
+                                    </div>
+                                }.into_any()
+                            }
+                        }}
+                    </div>
+                </div>
+
                 {move || if show_about.get() {
                     let is_closing = is_about_closing.get();
                     let on_close_modal = move |_| close_about();
                     view! {
                         <div
                             class=move || format!(
-                                "fixed inset-0 bg-black/75 flex items-center justify-center z-50 p-4 select-none {}",
+                                "fixed inset-0 bg-black/80 backdrop-blur-[2px] flex items-center justify-center z-50 p-4 select-none {}",
                                 if is_closing { "animate-overlay-exit" } else { "animate-overlay-enter" }
                             )
                             on:click=on_close_modal
+                            on:wheel=move |e| e.stop_propagation()
                         >
                             <div
                                 class=move || format!(
-                                    "bg-zinc-900 border border-white/10 rounded-lg shadow-2xl max-w-[490px] w-full p-5 relative overflow-hidden flex flex-col gap-4 ring-1 ring-white/5 {}",
-                                    if is_closing { "animate-modal-exit" } else { "animate-modal-enter" }
+                                    "bg-zinc-900 border border-white/10 rounded-lg shadow-2xl max-w-[340px] w-full p-6 relative flex flex-col items-center text-center ring-1 ring-white/5 {}",
+                                    if is_closing { "animate-gallery-exit" } else { "animate-gallery-enter" }
                                 )
                                 on:click=move |e| e.stop_propagation()
+                                on:wheel=move |e| e.stop_propagation()
                             >
-                                <div class="flex items-start justify-between">
-                                    <div class="flex items-center gap-3">
-                                        <div class="w-10 h-10 rounded-lg bg-zinc-800 border border-white/10 flex items-center justify-center text-zinc-100 shadow-inner shrink-0">
-                                            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-                                                <path d="M12 2L14.4 9.6L22 12L14.4 14.4L12 22L9.6 14.4L2 12L9.6 9.6L12 2Z" />
-                                            </svg>
-                                        </div>
-                                        <div class="flex flex-col">
-                                            <div class="flex items-center gap-2">
-                                                <h2 class="text-sm font-semibold text-zinc-100 tracking-tight">"Glint"</h2>
-                                                <span class="text-[10px] font-mono px-1.5 py-0.5 rounded-lg bg-white/10 text-zinc-300 border border-white/10 leading-none">"v0.5.0"</span>
-                                            </div>
-                                            <p class="text-[11px] text-zinc-400 mt-0.5">"Captura y anotación rápida en pantalla"</p>
-                                        </div>
+                                <button
+                                    class="absolute top-3.5 right-3.5 text-zinc-400 hover:text-zinc-100 p-1.5 rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
+                                    aria-label="Cerrar ventana Acerca de"
+                                    on:click=on_close_modal
+                                >
+                                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M18 6L12 12M12 12L6 18M12 12L18 18M12 12L6 6" />
+                                    </svg>
+                                </button>
+
+                                <svg class="w-9 h-9 text-[#bef264] drop-shadow-[0_0_12px_rgba(190,242,100,0.55)] mb-3 mt-1" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M12 2L14.4 9.6L22 12L14.4 14.4L12 22L9.6 14.4L2 12L9.6 9.6L12 2Z" />
+                                </svg>
+
+                                <h2 class="text-base font-semibold text-zinc-100 tracking-tight">"Glint"</h2>
+                                <span class="text-xs text-[#bef264] font-mono mt-0.5">"v0.5.0"</span>
+
+                                <p class="text-xs text-zinc-400 mt-2 leading-relaxed max-w-[240px]">
+                                    "Capturador y editor de pantalla rápido para Linux"
+                                </p>
+
+                                <div class="w-full flex flex-col gap-2 mt-4 pt-4 border-t border-white/5 text-xs text-left">
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-zinc-400 text-[11.5px]">"Motor"</span>
+                                        <span class="text-zinc-200 text-[11.5px] font-medium">"Rust · Tauri · Leptos"</span>
                                     </div>
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-zinc-400 text-[11.5px]">"Entorno"</span>
+                                        <span class="text-zinc-200 text-[11.5px] font-medium">"Wayland / X11"</span>
+                                    </div>
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-zinc-400 text-[11.5px]">"OCR"</span>
+                                        <span class="text-zinc-200 text-[11.5px] font-medium">"Tesseract OCR"</span>
+                                    </div>
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-zinc-400 text-[11.5px]">"Licencia"</span>
+                                        <span class="text-zinc-200 text-[11.5px] font-medium">"MIT Open Source"</span>
+                                    </div>
+                                </div>
+
+                                <div class="flex items-center justify-center gap-4 mt-4 pt-3 border-t border-white/5 w-full text-xs">
                                     <button
-                                        class="text-zinc-400 hover:text-zinc-100 p-1.5 rounded-lg hover:bg-white/5 transition-colors cursor-pointer shrink-0 -mr-1 -mt-1"
-                                        aria-label="Cerrar ventana Acerca de"
-                                        on:click=on_close_modal
+                                        class="text-zinc-400 hover:text-zinc-100 transition-colors cursor-pointer"
+                                        on:click=move |_| open_url("https://github.com/Agustin-de-Oliveira/glint".to_string())
                                     >
-                                        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                            <path d="M18 6L12 12M12 12L6 18M12 12L18 18M12 12L6 6" />
-                                        </svg>
+                                        "GitHub"
                                     </button>
-                                </div>
-
-                                <div class="h-px bg-white/10"></div>
-
-                                <div class="grid grid-cols-2 gap-2.5">
-                                    <div class="bg-white/[0.02] border border-white/5 rounded-lg p-2.5 flex flex-col gap-1.5">
-                                        <span class="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 px-1 mb-0.5">"Herramientas"</span>
-                                        <div class="flex items-center justify-between py-1 px-1.5 rounded-lg hover:bg-white/[0.04] transition-colors">
-                                            <span class="text-[11.5px] text-zinc-300">"Lápiz"</span>
-                                            <kbd class="px-1.5 py-0.5 rounded-lg bg-white/10 text-zinc-200 font-mono text-[10px] border border-white/10 leading-none">"P"</kbd>
-                                        </div>
-                                        <div class="flex items-center justify-between py-1 px-1.5 rounded-lg hover:bg-white/[0.04] transition-colors">
-                                            <span class="text-[11.5px] text-zinc-300">"Resaltador"</span>
-                                            <kbd class="px-1.5 py-0.5 rounded-lg bg-white/10 text-zinc-200 font-mono text-[10px] border border-white/10 leading-none">"H"</kbd>
-                                        </div>
-                                        <div class="flex items-center justify-between py-1 px-1.5 rounded-lg hover:bg-white/[0.04] transition-colors">
-                                            <span class="text-[11.5px] text-zinc-300">"Rectángulo"</span>
-                                            <kbd class="px-1.5 py-0.5 rounded-lg bg-white/10 text-zinc-200 font-mono text-[10px] border border-white/10 leading-none">"R"</kbd>
-                                        </div>
-                                        <div class="flex items-center justify-between py-1 px-1.5 rounded-lg hover:bg-white/[0.04] transition-colors">
-                                            <span class="text-[11.5px] text-zinc-300">"Flecha"</span>
-                                            <kbd class="px-1.5 py-0.5 rounded-lg bg-white/10 text-zinc-200 font-mono text-[10px] border border-white/10 leading-none">"A"</kbd>
-                                        </div>
-                                        <div class="flex items-center justify-between py-1 px-1.5 rounded-lg hover:bg-white/[0.04] transition-colors">
-                                            <span class="text-[11.5px] text-zinc-300">"Círculo"</span>
-                                            <kbd class="px-1.5 py-0.5 rounded-lg bg-white/10 text-zinc-200 font-mono text-[10px] border border-white/10 leading-none">"C"</kbd>
-                                        </div>
-                                        <div class="flex items-center justify-between py-1 px-1.5 rounded-lg hover:bg-white/[0.04] transition-colors">
-                                            <span class="text-[11.5px] text-zinc-300">"Censurar / Blur"</span>
-                                            <kbd class="px-1.5 py-0.5 rounded-lg bg-white/10 text-zinc-200 font-mono text-[10px] border border-white/10 leading-none">"B"</kbd>
-                                        </div>
-                                        <div class="flex items-center justify-between py-1 px-1.5 rounded-lg hover:bg-white/[0.04] transition-colors">
-                                            <span class="text-[11.5px] text-zinc-300">"Gotero"</span>
-                                            <kbd class="px-1.5 py-0.5 rounded-lg bg-white/10 text-zinc-200 font-mono text-[10px] border border-white/10 leading-none">"I"</kbd>
-                                        </div>
-                                        <div class="flex items-center justify-between py-1 px-1.5 rounded-lg hover:bg-white/[0.04] transition-colors">
-                                            <span class="text-[11.5px] text-zinc-300">"Texto OCR"</span>
-                                            <kbd class="px-1.5 py-0.5 rounded-lg bg-white/10 text-zinc-200 font-mono text-[10px] border border-white/10 leading-none">"O"</kbd>
-                                        </div>
-                                    </div>
-
-                                    <div class="bg-white/[0.02] border border-white/5 rounded-lg p-2.5 flex flex-col gap-1.5">
-                                        <span class="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 px-1 mb-0.5">"Acciones"</span>
-                                        <div class="flex items-center justify-between py-1 px-1.5 rounded-lg hover:bg-white/[0.04] transition-colors">
-                                            <span class="text-[11.5px] text-zinc-300">"Copiar imagen"</span>
-                                            <kbd class="px-1.5 py-0.5 rounded-lg bg-white/10 text-zinc-200 font-mono text-[10px] border border-white/10 leading-none">"Ctrl+C"</kbd>
-                                        </div>
-                                        <div class="flex items-center justify-between py-1 px-1.5 rounded-lg hover:bg-white/[0.04] transition-colors">
-                                            <span class="text-[11.5px] text-zinc-300">"Guardar archivo"</span>
-                                            <kbd class="px-1.5 py-0.5 rounded-lg bg-white/10 text-zinc-200 font-mono text-[10px] border border-white/10 leading-none">"Ctrl+S"</kbd>
-                                        </div>
-                                        <div class="flex items-center justify-between py-1 px-1.5 rounded-lg hover:bg-white/[0.04] transition-colors">
-                                            <span class="text-[11.5px] text-zinc-300">"Deshacer"</span>
-                                            <kbd class="px-1.5 py-0.5 rounded-lg bg-white/10 text-zinc-200 font-mono text-[10px] border border-white/10 leading-none">"Ctrl+Z"</kbd>
-                                        </div>
-                                        <div class="flex items-center justify-between py-1 px-1.5 rounded-lg hover:bg-white/[0.04] transition-colors">
-                                            <span class="text-[11.5px] text-zinc-300">"Rehacer"</span>
-                                            <kbd class="px-1.5 py-0.5 rounded-lg bg-white/10 text-zinc-200 font-mono text-[10px] border border-white/10 leading-none">"Ctrl+Y"</kbd>
-                                        </div>
-                                        <div class="flex items-center justify-between py-1 px-1.5 rounded-lg hover:bg-white/[0.04] transition-colors">
-                                            <span class="text-[11.5px] text-zinc-300">"Limpiar trazos"</span>
-                                            <kbd class="px-1.5 py-0.5 rounded-lg bg-white/10 text-zinc-200 font-mono text-[10px] border border-white/10 leading-none">"Ctrl+K"</kbd>
-                                        </div>
-                                        <div class="flex items-center justify-between py-1 px-1.5 rounded-lg hover:bg-white/[0.04] transition-colors">
-                                            <span class="text-[11.5px] text-zinc-300">"Grosor trazo"</span>
-                                            <kbd class="px-1.5 py-0.5 rounded-lg bg-white/10 text-zinc-200 font-mono text-[10px] border border-white/10 leading-none">"[ / ]"</kbd>
-                                        </div>
-                                        <div class="flex items-center justify-between py-1 px-1.5 rounded-lg hover:bg-white/[0.04] transition-colors">
-                                            <span class="text-[11.5px] text-zinc-300">"Zoom / Pan"</span>
-                                            <kbd class="px-1.5 py-0.5 rounded-lg bg-white/10 text-zinc-200 font-mono text-[10px] border border-white/10 leading-none">"Rueda"</kbd>
-                                        </div>
-                                        <div class="flex items-center justify-between py-1 px-1.5 rounded-lg hover:bg-white/[0.04] transition-colors">
-                                            <span class="text-[11.5px] text-zinc-300">"Cerrar"</span>
-                                            <kbd class="px-1.5 py-0.5 rounded-lg bg-white/10 text-zinc-200 font-mono text-[10px] border border-white/10 leading-none">"Esc"</kbd>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div class="flex items-center justify-between pt-2 border-t border-white/10 text-[11px] text-zinc-500">
-                                    <span>"Rust · Tauri · Leptos"</span>
-                                    <span class="text-zinc-400 font-mono">"Esc para cerrar"</span>
+                                    <button
+                                        class="text-zinc-400 hover:text-zinc-100 transition-colors cursor-pointer"
+                                        on:click=move |_| open_url("https://github.com/Agustin-de-Oliveira/glint/issues".to_string())
+                                    >
+                                        "Reportar error"
+                                    </button>
                                 </div>
                             </div>
                         </div>
