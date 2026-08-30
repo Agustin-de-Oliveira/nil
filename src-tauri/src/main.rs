@@ -32,6 +32,23 @@ pub struct OcrBlock {
     pub h: f64,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct GalleryItem {
+    pub path: String,
+    pub filename: String,
+    pub timestamp: u64,
+    pub width: u32,
+    pub height: u32,
+    pub preview_base64: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct GalleryResponse {
+    pub items: Vec<GalleryItem>,
+    pub total: usize,
+    pub has_more: bool,
+}
+
 pub struct AppState {
     pub image_path: Mutex<Option<PathBuf>>,
     pub config_path: PathBuf,
@@ -301,6 +318,112 @@ fn save_image(data_base64: Option<String>) -> Result<String, String> {
     });
 
     Ok(target_str)
+}
+
+fn get_screenshots_dirs() -> Vec<PathBuf> {
+    let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let mut dirs = Vec::new();
+    let home_path = PathBuf::from(&home);
+
+    let spanish_capturas = home_path.join("Imágenes").join("Capturas de pantalla");
+    if spanish_capturas.exists() {
+        dirs.push(spanish_capturas);
+    }
+    let english_screenshots = home_path.join("Pictures").join("Screenshots");
+    if english_screenshots.exists() {
+        dirs.push(english_screenshots);
+    }
+    let pictures = home_path.join("Pictures");
+    if pictures.exists() && !dirs.contains(&pictures) {
+        dirs.push(pictures);
+    }
+    let imagenes = home_path.join("Imágenes");
+    if imagenes.exists() && !dirs.contains(&imagenes) {
+        dirs.push(imagenes);
+    }
+    dirs
+}
+
+#[tauri::command]
+async fn get_gallery_items(offset: usize, limit: usize) -> Result<GalleryResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dirs = get_screenshots_dirs();
+        let mut all_files: Vec<(PathBuf, SystemTime)> = Vec::new();
+
+        for dir in dirs {
+            if let Ok(entries) = fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                            let ext_lower = ext.to_lowercase();
+                            if ext_lower == "png" || ext_lower == "jpg" || ext_lower == "jpeg" || ext_lower == "webp" {
+                                let mtime = entry.metadata().and_then(|m| m.modified()).unwrap_or(UNIX_EPOCH);
+                                all_files.push((path, mtime));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        all_files.sort_by(|a, b| b.1.cmp(&a.1));
+        all_files.dedup_by(|a, b| a.0 == b.0);
+
+        let total = all_files.len();
+        let effective_limit = if limit == 0 { 5 } else { limit };
+        let slice = all_files.into_iter().skip(offset).take(effective_limit);
+
+        let mut items = Vec::new();
+        for (path, mtime) in slice {
+            let filename = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let timestamp = mtime.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            let (width, height) = get_png_dimensions(&path);
+            let preview_base64 = if let Ok(bytes) = fs::read(&path) {
+                let enc = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                format!("data:image/png;base64,{}", enc)
+            } else {
+                String::new()
+            };
+
+            items.push(GalleryItem {
+                path: path.to_string_lossy().to_string(),
+                filename,
+                timestamp,
+                width,
+                height,
+                preview_base64,
+            });
+        }
+
+        let has_more = offset + items.len() < total;
+
+        Ok(GalleryResponse {
+            items,
+            total,
+            has_more,
+        })
+    })
+    .await
+    .map_err(|e| format!("Task error: {}", e))?
+}
+
+#[tauri::command]
+async fn load_gallery_image(state: State<'_, AppState>, path: String) -> Result<String, String> {
+    let p = PathBuf::from(&path);
+    if !p.exists() {
+        return Err("El archivo no existe".to_string());
+    }
+    let p_clone = p.clone();
+    let bytes = tauri::async_runtime::spawn_blocking(move || fs::read(&p_clone))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+
+    let mut lock = state.image_path.lock().map_err(|e| e.to_string())?;
+    *lock = Some(p);
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:image/png;base64,{}", encoded))
 }
 
 #[tauri::command]
@@ -682,46 +805,51 @@ fn capture_full_image(target_path: &PathBuf) -> bool {
     false
 }
 
-fn run_full_capture(config_path: &PathBuf) {
-    let path = generate_temp_path();
-    if capture_full_image(&path) {
-        let _ = copy_file_to_clipboard(&path);
+fn notify_and_maybe_edit(path: PathBuf, config_path: PathBuf, title: &str, body: &str) {
+    let _ = copy_file_to_clipboard(&path);
 
-        let path_for_thread = path.clone();
-        let config_path_for_thread = config_path.clone();
+    let output = Command::new("notify-send")
+        .arg("-a")
+        .arg("Glint")
+        .arg("-i")
+        .arg(&path)
+        .arg("-A")
+        .arg("edit=Editar")
+        .arg("-t")
+        .arg("5000")
+        .arg(title)
+        .arg(body)
+        .output();
 
-        let output = Command::new("notify-send")
-            .arg("-a")
-            .arg("Glint")
-            .arg("-i")
-            .arg(&path_for_thread)
-            .arg("-A")
-            .arg("edit=Editar")
-            .arg("Captura copiada")
-            .arg("Pantalla completa en el portapapeles")
-            .output();
-
-        if let Ok(out) = output {
-            let choice = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if choice == "edit" || choice == "0" || choice == "default" {
-                launch_tauri(Some(path_for_thread), config_path_for_thread);
-            }
+    if let Ok(out) = output {
+        let choice = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if choice == "edit" || choice == "0" || choice == "default" {
+            launch_tauri(Some(path), config_path);
         }
     }
 }
 
-fn run_area_capture(config_path: &PathBuf) -> Option<PathBuf> {
+fn run_full_capture(config_path: &PathBuf) {
     let path = generate_temp_path();
-    if !capture_area_image(&path) {
-        return None;
+    if capture_full_image(&path) {
+        notify_and_maybe_edit(
+            path,
+            config_path.clone(),
+            "Captura copiada",
+            "Pantalla completa en el portapapeles",
+        );
     }
+}
 
-    let cfg = load_config(config_path);
-    if !cfg.open_editor {
-        let _ = copy_file_to_clipboard(&path);
-        None
-    } else {
-        Some(path)
+fn run_area_capture(config_path: &PathBuf) {
+    let path = generate_temp_path();
+    if capture_area_image(&path) {
+        notify_and_maybe_edit(
+            path,
+            config_path.clone(),
+            "Captura copiada",
+            "Área guardada en el portapapeles",
+        );
     }
 }
 
@@ -776,6 +904,8 @@ fn launch_tauri(image_path: Option<PathBuf>, config_path: PathBuf) {
             save_image,
             toggle_pin_window,
             is_tiling_desktop,
+            get_gallery_items,
+            load_gallery_image,
             extract_text,
             open_external_url,
             close_window
@@ -803,9 +933,7 @@ fn handle_key_press(config_path: PathBuf) {
     if let Ok(current_token) = fs::read_to_string(&lock_path) {
         if current_token == token {
             let _ = fs::remove_file(&lock_path);
-            if let Some(img_path) = run_area_capture(&config_path) {
-                launch_tauri(Some(img_path), config_path);
-            }
+            run_area_capture(&config_path);
         }
     }
 }
@@ -834,6 +962,14 @@ fn main() {
     let config_path = config_dir.join("config.json");
 
     let args: Vec<String> = env::args().collect();
+    if let Some(arg) = args.get(1) {
+        let path = PathBuf::from(arg);
+        if path.exists() && path.is_file() {
+            launch_tauri(Some(path), config_path);
+            return;
+        }
+    }
+
     let mode = args.get(1).map(|s| s.as_str()).unwrap_or("--area");
 
     match mode {
@@ -847,18 +983,14 @@ fn main() {
             run_full_capture(&config_path);
         }
         "--area" | "-a" => {
-            if let Some(img_path) = run_area_capture(&config_path) {
-                launch_tauri(Some(img_path), config_path);
-            }
+            run_area_capture(&config_path);
         }
         "--edit" | "-e" => {
             let img_path = args.get(2).map(PathBuf::from);
             launch_tauri(img_path, config_path);
         }
         _ => {
-            if let Some(img_path) = run_area_capture(&config_path) {
-                launch_tauri(Some(img_path), config_path);
-            }
+            run_area_capture(&config_path);
         }
     }
 }
