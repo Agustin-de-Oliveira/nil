@@ -2,6 +2,10 @@
 target = "index.html"
 dist = "dist"
 
+[serve]
+port = 1420
+open = false
+
 [[hooks]]
 stage = "pre_build"
 command = "../bin/tailwindcss"
