@@ -24,12 +24,23 @@ impl Default for Config {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct OcrEntity {
+    pub kind: String,
+    pub value: String,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct OcrBlock {
     pub text: String,
     pub x: f64,
     pub y: f64,
     pub w: f64,
     pub h: f64,
+    pub entities: Vec<OcrEntity>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -445,7 +456,13 @@ fn is_tiling_desktop() -> bool {
 
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
-    let _ = Command::new("xdg-open").arg(&url).spawn();
+    let clean = url.trim();
+    let target = if clean.starts_with("http://") || clean.starts_with("https://") {
+        clean.to_string()
+    } else {
+        format!("https://{}", clean)
+    };
+    let _ = Command::new("xdg-open").arg(&target).spawn();
     Ok(())
 }
 
@@ -525,6 +542,7 @@ async fn extract_text(
             max_x: f64,
             max_y: f64,
             words: Vec<String>,
+            entities: Vec<OcrEntity>,
         }
 
         let mut lines_map: BTreeMap<(i32, i32, i32), LineAccumulator> = BTreeMap::new();
@@ -548,12 +566,80 @@ async fn extract_text(
                     let right = left + width;
                     let bottom = top + height;
 
+                    let mut entity_opt = None;
+                    let clean_url = text.trim_matches(|c: char| {
+                        c == '"' || c == '\'' || c == '`' || c == '(' || c == ')' || c == '[' || c == ']' || c == '<' || c == '>' || c == '{' || c == '}' || c == ',' || c == ';' || c == '.'
+                    });
+                    if clean_url.starts_with("http://") || clean_url.starts_with("https://") {
+                        entity_opt = Some(OcrEntity {
+                            kind: "url".to_string(),
+                            value: clean_url.to_string(),
+                            x: left,
+                            y: top,
+                            w: width,
+                            h: height,
+                        });
+                    } else if clean_url.starts_with("www.") {
+                        entity_opt = Some(OcrEntity {
+                            kind: "url".to_string(),
+                            value: format!("https://{}", clean_url),
+                            x: left,
+                            y: top,
+                            w: width,
+                            h: height,
+                        });
+                    } else if (clean_url.contains(".com") || clean_url.contains(".org") || clean_url.contains(".io") || clean_url.contains(".dev") || clean_url.contains(".net") || clean_url.contains(".app") || clean_url.contains(".ar"))
+                        && clean_url.contains('.')
+                        && !clean_url.contains('@')
+                        && clean_url.len() >= 4
+                    {
+                        entity_opt = Some(OcrEntity {
+                            kind: "url".to_string(),
+                            value: format!("https://{}", clean_url),
+                            x: left,
+                            y: top,
+                            w: width,
+                            h: height,
+                        });
+                    } else {
+                        let clean_col = text.trim_matches(|c: char| {
+                            c == '"' || c == '\'' || c == '`' || c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' || c == ',' || c == ';' || c == ':'
+                        });
+                        if clean_col.starts_with('#') {
+                            let hex = &clean_col[1..];
+                            if (hex.len() == 3 || hex.len() == 4 || hex.len() == 6 || hex.len() == 8)
+                                && hex.chars().all(|c| c.is_ascii_hexdigit())
+                            {
+                                entity_opt = Some(OcrEntity {
+                                    kind: "color".to_string(),
+                                    value: clean_col.to_string(),
+                                    x: left,
+                                    y: top,
+                                    w: width,
+                                    h: height,
+                                });
+                            }
+                        } else if (clean_col.starts_with("rgb(") || clean_col.starts_with("rgba(") || clean_col.starts_with("hsl(") || clean_col.starts_with("hsla(")) && clean_col.ends_with(')') {
+                            entity_opt = Some(OcrEntity {
+                                kind: "color".to_string(),
+                                value: clean_col.to_string(),
+                                x: left,
+                                y: top,
+                                w: width,
+                                h: height,
+                            });
+                        }
+                    }
+
                     if let Some(acc) = lines_map.get_mut(&key) {
                         acc.min_x = acc.min_x.min(left);
                         acc.min_y = acc.min_y.min(top);
                         acc.max_x = acc.max_x.max(right);
                         acc.max_y = acc.max_y.max(bottom);
                         acc.words.push(text);
+                        if let Some(ent) = entity_opt {
+                            acc.entities.push(ent);
+                        }
                     } else {
                         lines_map.insert(
                             key,
@@ -563,6 +649,7 @@ async fn extract_text(
                                 max_x: right,
                                 max_y: bottom,
                                 words: vec![text],
+                                entities: entity_opt.into_iter().collect(),
                             },
                         );
                     }
@@ -582,6 +669,7 @@ async fn extract_text(
                     y: acc.min_y,
                     w,
                     h,
+                    entities: acc.entities,
                 });
             }
         }

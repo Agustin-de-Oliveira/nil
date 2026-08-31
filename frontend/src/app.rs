@@ -72,12 +72,24 @@ pub struct OpenUrlArgs {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct OcrEntity {
+    pub kind: String,
+    pub value: String,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct OcrBlock {
     pub text: String,
     pub x: f64,
     pub y: f64,
     pub w: f64,
     pub h: f64,
+    #[serde(default)]
+    pub entities: Vec<OcrEntity>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -299,29 +311,42 @@ async fn sleep_ms(ms: i32) {
 }
 
 fn detect_url(text: &str) -> Option<String> {
-    let t = text.trim();
-    if t.starts_with("http://") || t.starts_with("https://") {
-        Some(t.to_string())
-    } else if t.starts_with("www.") {
-        Some(format!("https://{}", t))
-    } else if (t.starts_with("github.com") || t.starts_with("gitlab.com") || t.starts_with("twitter.com") || t.starts_with("x.com")) && !t.contains(' ') {
-        Some(format!("https://{}", t))
-    } else {
-        None
+    for word in text.split_whitespace() {
+        let clean = word.trim_matches(|c: char| {
+            c == '"' || c == '\'' || c == '`' || c == '(' || c == ')' || c == '[' || c == ']' || c == '<' || c == '>' || c == '{' || c == '}' || c == ',' || c == ';' || c == '.'
+        });
+        if clean.starts_with("http://") || clean.starts_with("https://") {
+            return Some(clean.to_string());
+        }
+        if clean.starts_with("www.") {
+            return Some(format!("https://{}", clean));
+        }
+        if (clean.contains(".com") || clean.contains(".org") || clean.contains(".io") || clean.contains(".dev") || clean.contains(".net") || clean.contains(".app") || clean.contains(".ar"))
+            && clean.contains('.')
+            && !clean.contains('@')
+            && clean.len() >= 4
+        {
+            return Some(format!("https://{}", clean));
+        }
     }
+    None
 }
 
 fn detect_color(text: &str) -> Option<String> {
-    let t = text.trim();
-    if t.starts_with('#') {
-        let hex = &t[1..];
-        if (hex.len() == 3 || hex.len() == 4 || hex.len() == 6 || hex.len() == 8)
-            && hex.chars().all(|c| c.is_ascii_hexdigit())
-        {
-            return Some(t.to_string());
+    for word in text.split_whitespace() {
+        let clean = word.trim_matches(|c: char| {
+            c == '"' || c == '\'' || c == '`' || c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' || c == ',' || c == ';' || c == ':'
+        });
+        if clean.starts_with('#') {
+            let hex = &clean[1..];
+            if (hex.len() == 3 || hex.len() == 4 || hex.len() == 6 || hex.len() == 8)
+                && hex.chars().all(|c| c.is_ascii_hexdigit())
+            {
+                return Some(clean.to_string());
+            }
+        } else if (clean.starts_with("rgb(") || clean.starts_with("rgba(") || clean.starts_with("hsl(") || clean.starts_with("hsla(")) && clean.ends_with(')') {
+            return Some(clean.to_string());
         }
-    } else if (t.starts_with("rgb(") || t.starts_with("rgba(") || t.starts_with("hsl(") || t.starts_with("hsla(")) && t.ends_with(')') {
-        return Some(t.to_string());
     }
     None
 }
@@ -2613,8 +2638,6 @@ pub fn App() -> impl IntoView {
                                     let width_pct = (b.w / safe_w) * 100.0;
                                     let height_pct = (b.h / safe_h) * 100.0;
                                     let is_selected = sel_set.contains(&idx);
-                                    let maybe_url = detect_url(&b.text);
-                                    let maybe_color = detect_color(&b.text);
 
                                     let box_class = if is_selected {
                                         "absolute rounded-xs pointer-events-auto group/ocr-box z-30 cursor-pointer ocr-box is-selected"
@@ -2645,33 +2668,51 @@ pub fn App() -> impl IntoView {
                                                 });
                                             }
                                         >
-                                            {if let Some(url_str) = maybe_url {
-                                                let url_clone = url_str.clone();
-                                                view! {
-                                                    <div
-                                                        class="absolute -top-7 left-0 z-50 flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-zinc-900 border border-white/20 text-[11px] text-zinc-200 shadow-xl opacity-0 group-hover/ocr-box:opacity-100 transition-opacity pointer-events-auto cursor-pointer hover:bg-zinc-800"
-                                                        on:click=move |e| {
-                                                            e.stop_propagation();
-                                                            open_url(url_clone.clone());
-                                                        }
-                                                    >
-                                                        <svg class="w-3 h-3 text-zinc-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                                            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-                                                            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-                                                        </svg>
-                                                        <span>"Abrir enlace"</span>
-                                                    </div>
-                                                }.into_any()
-                                            } else if let Some(color_code) = maybe_color {
-                                                view! {
-                                                    <div class="absolute -top-7 left-0 z-50 flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-zinc-900 border border-white/20 text-[11px] text-zinc-200 shadow-xl opacity-0 group-hover/ocr-box:opacity-100 transition-opacity pointer-events-auto">
-                                                        <span class="w-2.5 h-2.5 rounded-full border border-white/30" style=format!("background-color: {};", color_code) />
-                                                        <span class="font-mono text-[10px] text-zinc-300">{color_code}</span>
-                                                    </div>
-                                                }.into_any()
-                                            } else {
-                                                view! { <span></span> }.into_any()
-                                            }}
+                                            {b.entities.into_iter().map(|entity| {
+                                                let rel_left = if b.w > 0.0 { ((entity.x - b.x) / b.w) * 100.0 } else { 0.0 };
+                                                let is_near_top = top_pct < 6.0;
+                                                let pos_class = if is_near_top { "-bottom-6" } else { "-top-6" };
+                                                if entity.kind == "url" {
+                                                    let u = entity.value.clone();
+                                                    let open_u = open_url.clone();
+                                                    view! {
+                                                        <button
+                                                            class=format!("absolute {} z-50 flex items-center gap-1 px-1.5 py-0.5 rounded bg-zinc-900 border border-white/20 text-[10.5px] text-[#bef264] shadow-xl pointer-events-auto cursor-pointer hover:bg-zinc-800 hover:text-white transition-colors whitespace-nowrap", pos_class)
+                                                            style=format!("left: {:.2}%;", rel_left)
+                                                            on:click=move |e| {
+                                                                e.stop_propagation();
+                                                                e.prevent_default();
+                                                                open_u(u.clone());
+                                                            }
+                                                        >
+                                                            <svg class="w-2.5 h-2.5 text-[#bef264]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                                                                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                                                            </svg>
+                                                            <span>"Abrir"</span>
+                                                        </button>
+                                                    }.into_any()
+                                                } else if entity.kind == "color" {
+                                                    let c = entity.value.clone();
+                                                    let c_copy = copy_text_direct.clone();
+                                                    view! {
+                                                        <button
+                                                            class=format!("absolute {} z-50 flex items-center gap-1.5 px-1.5 py-0.5 rounded bg-zinc-900 border border-white/20 text-[10.5px] text-zinc-200 shadow-xl pointer-events-auto cursor-pointer hover:bg-zinc-800 hover:text-white transition-colors whitespace-nowrap", pos_class)
+                                                            style=format!("left: {:.2}%;", rel_left)
+                                                            on:click=move |e| {
+                                                                e.stop_propagation();
+                                                                e.prevent_default();
+                                                                c_copy(c.clone());
+                                                            }
+                                                        >
+                                                            <span class="w-2.5 h-2.5 rounded-full border border-white/30 shrink-0" style=format!("background-color: {};", entity.value) />
+                                                            <span class="font-mono text-[10px] text-zinc-300">{entity.value.clone()}</span>
+                                                        </button>
+                                                    }.into_any()
+                                                } else {
+                                                    view! { <span></span> }.into_any()
+                                                }
+                                            }).collect_view()}
                                         </div>
                                     }
                                 }).collect_view()}
@@ -2872,10 +2913,10 @@ pub fn App() -> impl IntoView {
                     view! {
                         <div>
                             <div class="fixed bottom-14 right-4 z-40 w-80 bg-zinc-900 border border-white/12 rounded-lg shadow-2xl flex flex-col p-3 animate-dropdown gap-2.5 ocr-preview-card">
-                                <div class="flex items-center justify-between">
-                                    <div class="flex items-center gap-2">
-                                        <span class=format!("w-2 h-2 rounded-full transition-colors duration-200 {}", if sel_count > 0 { "bg-[#98c379]" } else { "bg-zinc-600" }) />
-                                        <span class="text-xs font-medium text-zinc-100">
+                                <div class="flex items-center justify-between gap-2">
+                                    <div class="flex items-center gap-2 truncate">
+                                        <span class=format!("w-2 h-2 rounded-full shrink-0 transition-colors duration-200 {}", if sel_count > 0 { "bg-[#98c379]" } else { "bg-zinc-600" }) />
+                                        <span class="text-xs font-medium text-zinc-100 truncate">
                                             {if sel_count > 0 {
                                                 format!("Selección ({} bloques)", sel_count)
                                             } else {
@@ -2883,31 +2924,68 @@ pub fn App() -> impl IntoView {
                                             }}
                                         </span>
                                     </div>
-                                    {if sel_count > 0 {
-                                        let c_sel_btn = copy_selected_ocr.clone();
-                                        view! {
-                                            <button
-                                                class="px-2.5 py-1 text-[11px] font-medium rounded-md bg-[#98c379] text-zinc-950 hover:bg-[#8ab56b] transition-colors cursor-pointer flex items-center gap-1 shadow-xs animate-dropdown"
-                                                on:click=move |_| c_sel_btn()
-                                            >
-                                                <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                                    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
-                                                    <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
-                                                </svg>
-                                                "Copiar"
-                                            </button>
-                                        }.into_any()
-                                    } else {
-                                        let c_all_btn = copy_all_ocr.clone();
-                                        view! {
-                                            <button
-                                                class="px-2.5 py-1 text-[11px] font-medium rounded-md bg-white/10 text-zinc-300 hover:bg-white/20 hover:text-white transition-colors cursor-pointer flex items-center gap-1 shadow-xs"
-                                                on:click=move |_| c_all_btn()
-                                            >
-                                                "Copiar todo"
-                                            </button>
-                                        }.into_any()
-                                    }}
+                                    <div class="flex items-center gap-1.5 shrink-0">
+                                        {if let Some(color_str) = detect_color(&preview_text) {
+                                            let c = color_str.clone();
+                                            let c_copy = copy_text_direct.clone();
+                                            view! {
+                                                <button
+                                                    class="px-2 py-1 text-[11px] font-medium rounded-md bg-zinc-800 text-zinc-200 border border-white/10 hover:bg-zinc-700 transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs"
+                                                    on:click=move |_| c_copy(c.clone())
+                                                >
+                                                    <span class="w-2.5 h-2.5 rounded-full border border-white/30 shrink-0" style=format!("background-color: {};", color_str) />
+                                                    <span class="font-mono text-[10.5px] text-zinc-300">{color_str}</span>
+                                                </button>
+                                            }.into_any()
+                                        } else {
+                                            view! { <span></span> }.into_any()
+                                        }}
+
+                                        {if let Some(url_str) = detect_url(&preview_text) {
+                                            let u = url_str.clone();
+                                            let open_u = open_url.clone();
+                                            view! {
+                                                <button
+                                                    class="px-2 py-1 text-[11px] font-medium rounded-md bg-zinc-800 text-[#bef264] border border-white/10 hover:bg-zinc-700 transition-colors cursor-pointer flex items-center gap-1 shadow-xs"
+                                                    on:click=move |_| open_u(u.clone())
+                                                >
+                                                    <svg class="w-3 h-3 text-[#bef264]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                                                        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                                                    </svg>
+                                                    "Abrir enlace"
+                                                </button>
+                                            }.into_any()
+                                        } else {
+                                            view! { <span></span> }.into_any()
+                                        }}
+
+                                        {if sel_count > 0 {
+                                            let c_sel_btn = copy_selected_ocr.clone();
+                                            view! {
+                                                <button
+                                                    class="px-2.5 py-1 text-[11px] font-medium rounded-md bg-[#98c379] text-zinc-950 hover:bg-[#8ab56b] transition-colors cursor-pointer flex items-center gap-1 shadow-xs animate-dropdown"
+                                                    on:click=move |_| c_sel_btn()
+                                                >
+                                                    <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                        <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+                                                        <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+                                                    </svg>
+                                                    "Copiar"
+                                                </button>
+                                            }.into_any()
+                                        } else {
+                                            let c_all_btn = copy_all_ocr.clone();
+                                            view! {
+                                                <button
+                                                    class="px-2.5 py-1 text-[11px] font-medium rounded-md bg-white/10 text-zinc-300 hover:bg-white/20 hover:text-white transition-colors cursor-pointer flex items-center gap-1 shadow-xs"
+                                                    on:click=move |_| c_all_btn()
+                                                >
+                                                    "Copiar todo"
+                                                </button>
+                                            }.into_any()
+                                        }}
+                                    </div>
                                 </div>
 
                                 <div
