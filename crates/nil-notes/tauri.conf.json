@@ -1,0 +1,39 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-cli/schema.json",
+  "productName": "nil-notes",
+  "version": "0.1.0",
+  "identifier": "com.nil.notes",
+  "build": {
+    "devUrl": "http://localhost:1422",
+    "frontendDist": "../../frontend/nil-notes/dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["appimage", "deb", "rpm"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "shortDescription": "App de notas minimal para Linux",
+    "longDescription": "nil-notes es una app de notas rápida y minimalista para Linux.",
+    "category": "Utility",
+    "linux": {
+      "deb": {
+        "depends": ["libgtk-3-0", "libnotify-bin"]
+      },
+      "rpm": {
+        "depends": ["gtk3", "libnotify"]
+      }
+    }
+  }
+}

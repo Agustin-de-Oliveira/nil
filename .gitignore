@@ -1,8 +1,7 @@
 target/
 **/target/
-frontend/dist/
-frontend/styles/main.css
-src-tauri/gen/
+frontend/*/dist/
+frontend/*/styles/main.css
 bin/
 
 .idea/
