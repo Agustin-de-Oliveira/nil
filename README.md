@@ -2,11 +2,11 @@
 
 # nil
 
-**Suite minimalista de herramientas nativas para Linux.**
+**Suite de herramientas ligeras para Linux.**
 
-nil es un ecosistema de aplicaciones de escritorio ligeras, independientes y con foco en el teclado, construidas con **Rust**, **Tauri 2**, **Leptos (WASM)** y **Tailwind CSS**. Diseñadas para iniciar al instante, integrarse de forma fluida con Wayland y X11, y mantenerse fuera de tu camino.
+nil es un conjunto de aplicaciones de escritorio independientes construidas con **Rust**, **Tauri 2**, **Leptos (WASM)** y **Tailwind CSS**, diseñadas para abrir rápido, consumir pocos recursos y funcionar de manera nativa tanto en entornos Wayland como en X11.
 
-[Aplicaciones](#aplicaciones) · [Stack Tecnológico](#stack-tecnológico) · [Instalación](#instalación) · [Guía de Desarrollo](CONTRIBUTING.md)
+[Aplicaciones](#aplicaciones) · [Desarrollo en Vivo](#desarrollo-en-vivo) · [Stack Tecnológico](#stack-tecnológico) · [Instalación](#instalación) · [Guía de Contribución](CONTRIBUTING.md)
 
 </div>
 
@@ -14,9 +14,9 @@ nil es un ecosistema de aplicaciones de escritorio ligeras, independientes y con
 
 ## ¿Qué es nil?
 
-La mayoría de las herramientas de escritorio modernas sufren de sobrecarga: aplicaciones lentas montadas sobre runtimes pesados que consumen cientos de megabytes de memoria para tareas puntuales del día a día.
+nil reúne herramientas de escritorio para tareas puntuales del día a día (captura de pantalla, gestión de portapapeles y notas rápidas).
 
-nil propone una alternativa: **utilidades de un solo propósito, rápidas, visualmente coherentes y con consumo ocioso despreciable**. Cada herramienta de la suite opera de forma autónoma con interfaces limpias, soporte nativo de atajos de teclado y una arquitectura modular compartida.
+Cada aplicación funciona de manera autónoma con su propia ventana e interfaz, pero comparten una arquitectura común: lógica de bajo nivel implementada en Rust para máxima velocidad y bajo consumo de memoria, combinada con interfaces reactivas compiladas a WebAssembly.
 
 ---
 
@@ -35,7 +35,7 @@ Gestor de historial de portapapeles de baja latencia.
 - **Monitoreo eficiente**: registro automático y persistente del portapapeles con bajo impacto en recursos.
 - **Búsqueda difusa (fuzzy search)**: filtrado instantáneo en tiempo real sobre el historial de copiado.
 - **Previsualización contextual**: detección automática y formateo de fragmentos de código, enlaces y texto plano.
-- **Flujo orientado a teclado**: navegación rápida con flechas y copiado inmediato al presionar Enter.
+- **Acceso rápido**: navegación ágil con flechas del teclado y pegado inmediato.
 
 ### nil-notes
 Bloc de notas flotante y editor sin distracciones.
@@ -43,6 +43,14 @@ Bloc de notas flotante y editor sin distracciones.
 - **Recuperación intuitiva**: volver hacia arriba con las flechas o tecla de borrado restaura el título para editarlo.
 - **Formato rico y listas**: compatibilidad con negrita, cursiva, subrayado, tachado y casillas de verificación interactivas.
 - **Sincronización en tiempo real**: títulos de pestañas reactivos derivados de la primera línea y guardado automático transparente.
+
+---
+
+## Desarrollo en Vivo
+
+Una de las ventajas del diseño modular con Leptos y Trunk es la posibilidad de **programar y ver los cambios en vivo**.
+
+Al ejecutar cualquiera de las aplicaciones en modo de desarrollo (`make notes`, `make shot` o `make clip`), Trunk recompila el código WebAssembly y Tailwind en segundo plano, refrescando la interfaz al instante sin necesidad de reiniciar la ventana de Tauri ni volver a compilar los binarios de Rust.
 
 ---
 
@@ -65,7 +73,28 @@ Bloc de notas flotante y editor sin distracciones.
 
 ## Instalación
 
-Los paquetes ejecutables precompilados (AppImage, deb, rpm) y binarios independientes están disponibles en la sección de **[Releases](https://github.com/Agustin-de-Oliveira/nil/releases)** del repositorio.
+Las versiones compiladas están disponibles en la sección de **[Releases](https://github.com/Agustin-de-Oliveira/nil/releases)** del repositorio.
+
+### AppImage (Universal)
+Descargá el archivo correspondiente a la herramienta, dale permisos de ejecución y abrilo directamente:
+
+```bash
+chmod +x nil-shot_x86_64.AppImage
+./nil-shot_x86_64.AppImage
+```
+
+### Paquetes `.deb` (Debian, Ubuntu, Pop!_OS, Linux Mint)
+```bash
+sudo dpkg -i nil-shot_amd64.deb
+```
+
+### Paquetes `.rpm` (Fedora, openSUSE, RHEL)
+```bash
+sudo rpm -i nil-shot_x86_64.rpm
+```
+
+### Binarios independientes
+También podés descargar directamente el binario compilado de cada herramienta y ubicarlo en tu `$PATH` (por ejemplo en `~/.local/bin` o `/usr/local/bin`).
 
 ---
 
@@ -77,4 +106,4 @@ Para instrucciones sobre compilación desde el código fuente, dependencias del 
 
 ## Licencia
 
-Este proyecto se distribuye bajo los términos de la Licencia MIT.
+Este proyecto se distribuye bajo los términos de la **Licencia Apache 2.0**.
