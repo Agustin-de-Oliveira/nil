@@ -1,11 +1,11 @@
-.PHONY: help shot clip notes build build-shot build-clip build-notes check clean
+.PHONY: help shot clip notes build build-shot build-clip build-notes build-frontends check clean
 
 help:
 	@echo "nil suite:"
 	@echo "  make shot        - Inicia nil-shot en modo dev"
 	@echo "  make clip        - Inicia nil-clip en modo dev"
 	@echo "  make notes       - Inicia nil-notes en modo dev"
-	@echo "  make build       - Compila los 3 frontends y binarios release"
+	@echo "  make build       - Compila los 3 frontends y binarios release del workspace"
 	@echo "  make check       - Verifica codigo con cargo check"
 	@echo "  make clean       - Limpia target/ y dist/"
 
@@ -28,18 +28,24 @@ notes:
 	cargo run -p nil-notes
 
 build-shot:
-	@cd frontend/nil-shot && ../../bin/trunk build
+	@cd frontend/nil-shot && ../../bin/trunk build --release
 	@cargo build -p nil-shot --release
 
 build-clip:
-	@cd frontend/nil-clip && ../../bin/trunk build
+	@cd frontend/nil-clip && ../../bin/trunk build --release
 	@cargo build -p nil-clip --release
 
 build-notes:
-	@cd frontend/nil-notes && ../../bin/trunk build
+	@cd frontend/nil-notes && ../../bin/trunk build --release
 	@cargo build -p nil-notes --release
 
-build: build-shot build-clip build-notes
+build-frontends:
+	@cd frontend/nil-shot && ../../bin/trunk build --release
+	@cd frontend/nil-clip && ../../bin/trunk build --release
+	@cd frontend/nil-notes && ../../bin/trunk build --release
+
+build: build-frontends
+	@cargo build --workspace --release
 
 check:
 	@cargo check --workspace
