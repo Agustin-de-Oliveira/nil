@@ -58,9 +58,13 @@ pub struct GalleryResponse {
 
 pub fn get_config_dir() -> PathBuf {
     let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let path = PathBuf::from(home).join(".config").join("screenshot-tool");
-    let _ = fs::create_dir_all(&path);
-    path
+    let new_path = PathBuf::from(&home).join(".config").join("nil").join("nil-shot");
+    let legacy_path = PathBuf::from(&home).join(".config").join("screenshot-tool");
+    if !new_path.exists() && legacy_path.exists() {
+        return legacy_path;
+    }
+    let _ = fs::create_dir_all(&new_path);
+    new_path
 }
 
 pub fn load_config(config_path: &PathBuf) -> Config {
@@ -692,7 +696,7 @@ pub fn notify_and_maybe_edit(path: &PathBuf, title: &str, body: &str) -> bool {
 
     let output = Command::new("notify-send")
         .arg("-a")
-        .arg("Glint")
+        .arg("nil-shot")
         .arg("-i")
         .arg(path)
         .arg("-A")
@@ -712,5 +716,259 @@ pub fn notify_and_maybe_edit(path: &PathBuf, title: &str, body: &str) -> bool {
 }
 
 pub fn get_hold_lock_path() -> PathBuf {
-    PathBuf::from("/tmp/glint_hold.lock")
+    PathBuf::from("/tmp/nil_shot_hold.lock")
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ClipboardKind {
+    Text,
+    Image,
+    Url,
+    Color,
+    Code,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ClipboardItem {
+    pub id: String,
+    pub kind: ClipboardKind,
+    pub content: String,
+    pub preview: String,
+    pub timestamp: u64,
+    pub pinned: bool,
+    pub char_count: usize,
+    pub metadata: Option<String>,
+}
+
+pub fn get_clipboard_data_dir() -> PathBuf {
+    let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let path = PathBuf::from(home).join(".local").join("share").join("nil").join("nil-clip");
+    let _ = fs::create_dir_all(&path);
+    let _ = fs::create_dir_all(path.join("images"));
+    path
+}
+
+pub fn load_clipboard_history() -> Vec<ClipboardItem> {
+    let dir = get_clipboard_data_dir();
+    let file = dir.join("history.json");
+    if let Ok(content) = fs::read_to_string(file) {
+        if let Ok(items) = serde_json::from_str::<Vec<ClipboardItem>>(&content) {
+            return items;
+        }
+    }
+    Vec::new()
+}
+
+pub fn save_clipboard_history(items: &[ClipboardItem]) -> Result<(), String> {
+    let dir = get_clipboard_data_dir();
+    let file = dir.join("history.json");
+    let json = serde_json::to_string_pretty(items).map_err(|e| e.to_string())?;
+    fs::write(file, json).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn classify_clipboard_text(text: &str) -> ClipboardKind {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return ClipboardKind::Text;
+    }
+
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return ClipboardKind::Url;
+    }
+
+    if trimmed.starts_with("www.") && trimmed.contains('.') && !trimmed.contains(' ') {
+        return ClipboardKind::Url;
+    }
+
+    if trimmed.starts_with('#') {
+        let hex = &trimmed[1..];
+        if (hex.len() == 3 || hex.len() == 4 || hex.len() == 6 || hex.len() == 8)
+            && hex.chars().all(|c| c.is_ascii_hexdigit())
+        {
+            return ClipboardKind::Color;
+        }
+    }
+
+    if (trimmed.starts_with("rgb(")
+        || trimmed.starts_with("rgba(")
+        || trimmed.starts_with("hsl(")
+        || trimmed.starts_with("hsla("))
+        && trimmed.ends_with(')')
+    {
+        return ClipboardKind::Color;
+    }
+
+    let is_code = trimmed.lines().count() > 1
+        && (trimmed.contains('{')
+            || trimmed.contains('}')
+            || trimmed.contains("fn ")
+            || trimmed.contains("let ")
+            || trimmed.contains("const ")
+            || trimmed.contains("def ")
+            || trimmed.contains("class ")
+            || trimmed.contains("import ")
+            || trimmed.contains("export ")
+            || trimmed.contains("SELECT ")
+            || trimmed.contains("curl ")
+            || trimmed.contains("sudo "));
+
+    if is_code {
+        return ClipboardKind::Code;
+    }
+
+    ClipboardKind::Text
+}
+
+pub fn add_clipboard_text(text: &str) -> Option<ClipboardItem> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let kind = classify_clipboard_text(text);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let id = format!("{}_{}", now, trimmed.len());
+    let preview = if text.len() > 180 {
+        format!("{}...", &text[..180])
+    } else {
+        text.to_string()
+    };
+
+    let item = ClipboardItem {
+        id,
+        kind,
+        content: text.to_string(),
+        preview,
+        timestamp: now,
+        pinned: false,
+        char_count: text.chars().count(),
+        metadata: None,
+    };
+
+    let mut history = load_clipboard_history();
+    let mut is_pinned = false;
+
+    if let Some(pos) = history.iter().position(|h| h.content == item.content) {
+        is_pinned = history[pos].pinned;
+        history.remove(pos);
+    }
+
+    let mut final_item = item;
+    final_item.pinned = is_pinned;
+
+    let insert_pos = history.iter().position(|h| !h.pinned).unwrap_or(history.len());
+    if final_item.pinned {
+        history.insert(0, final_item.clone());
+    } else {
+        history.insert(insert_pos, final_item.clone());
+    }
+
+    if history.len() > 250 {
+        history.truncate(250);
+    }
+
+    let _ = save_clipboard_history(&history);
+    Some(final_item)
+}
+
+pub fn add_clipboard_image(png_bytes: &[u8]) -> Option<ClipboardItem> {
+    if png_bytes.is_empty() {
+        return None;
+    }
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let dir = get_clipboard_data_dir();
+    let filename = format!("img_{}.png", now);
+    let target = dir.join("images").join(&filename);
+
+    if fs::write(&target, png_bytes).is_err() {
+        return None;
+    }
+
+    let (w, h) = get_png_dimensions(&target);
+    let preview = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(png_bytes)
+    );
+
+    let id = format!("{}_img", now);
+    let item = ClipboardItem {
+        id,
+        kind: ClipboardKind::Image,
+        content: target.to_string_lossy().to_string(),
+        preview,
+        timestamp: now,
+        pinned: false,
+        char_count: 0,
+        metadata: Some(format!("{}x{}", w, h)),
+    };
+
+    let mut history = load_clipboard_history();
+    let insert_pos = history.iter().position(|h| !h.pinned).unwrap_or(history.len());
+    history.insert(insert_pos, item.clone());
+
+    if history.len() > 250 {
+        history.truncate(250);
+    }
+
+    let _ = save_clipboard_history(&history);
+    Some(item)
+}
+
+pub fn delete_clipboard_item(id: &str) -> Result<(), String> {
+    let mut history = load_clipboard_history();
+    if let Some(pos) = history.iter().position(|h| h.id == id) {
+        let item = history.remove(pos);
+        if item.kind == ClipboardKind::Image {
+            let _ = fs::remove_file(&item.content);
+        }
+        save_clipboard_history(&history)?;
+        Ok(())
+    } else {
+        Err("Elemento no encontrado".to_string())
+    }
+}
+
+pub fn toggle_pin_clipboard_item(id: &str) -> Result<bool, String> {
+    let mut history = load_clipboard_history();
+    if let Some(pos) = history.iter().position(|h| h.id == id) {
+        let next = !history[pos].pinned;
+        history[pos].pinned = next;
+        let item = history.remove(pos);
+        if next {
+            history.insert(0, item);
+        } else {
+            let insert_pos = history.iter().position(|h| !h.pinned).unwrap_or(history.len());
+            history.insert(insert_pos, item);
+        }
+        save_clipboard_history(&history)?;
+        Ok(next)
+    } else {
+        Err("Elemento no encontrado".to_string())
+    }
+}
+
+pub fn clear_clipboard_history() -> Result<(), String> {
+    let mut history = load_clipboard_history();
+    let mut to_keep = Vec::new();
+
+    for item in history.drain(..) {
+        if item.pinned {
+            to_keep.push(item);
+        } else if item.kind == ClipboardKind::Image {
+            let _ = fs::remove_file(&item.content);
+        }
+    }
+
+    save_clipboard_history(&to_keep)
 }

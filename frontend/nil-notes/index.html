@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="es" class="dark h-full">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>nil-notes</title>
+    <link data-trunk rel="copy-dir" href="styles/fonts" data-target-path="fonts" />
+    <link data-trunk rel="css" href="styles/main.css" />
+    <script>
+        window.callTauri = async function(cmd, args) {
+            try {
+                if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+                    return await window.__TAURI__.core.invoke(cmd, args);
+                }
+                if (window.__TAURI__ && window.__TAURI__.invoke) {
+                    return await window.__TAURI__.invoke(cmd, args);
+                }
+            } catch (err) {
+                console.error("Tauri invoke error:", err);
+                throw err;
+            }
+            return null;
+        };
+
+        window.formatText = function(cmd, val) {
+            if (cmd === 'checkbox') {
+                const sel = window.getSelection();
+                if (sel && sel.rangeCount > 0) {
+                    const range = sel.getRangeAt(0);
+                    if (!range.collapsed) {
+                        const content = range.extractContents();
+                        const span = document.createElement('span');
+                        span.appendChild(content);
+                        const html = '<input type="checkbox">&nbsp;' + span.innerHTML;
+                        document.execCommand('insertHTML', false, html);
+                        return;
+                    }
+                }
+                document.execCommand('insertHTML', false, '<input type="checkbox">&nbsp;');
+                return;
+            }
+            if (cmd === 'formatBlock') {
+                const sel = window.getSelection();
+                if (sel && sel.rangeCount > 0) {
+                    let node = sel.getRangeAt(0).startContainer;
+                    let elem = node.nodeType === 1 ? node : node.parentElement;
+                    let tag = val.replace(/[<>]/g, '').toUpperCase();
+                    let inTag = false;
+                    while (elem && !elem.classList?.contains('nil-editor')) {
+                        if (elem.tagName === tag) {
+                            inTag = true;
+                            break;
+                        }
+                        elem = elem.parentElement;
+                    }
+                    if (inTag) {
+                        document.execCommand('formatBlock', false, '<p>');
+                        return;
+                    }
+                }
+            }
+            document.execCommand(cmd, false, val);
+        };
+
+        window.handleHeadingEnter = function(editor) {
+            const sel = window.getSelection();
+            if (!sel || sel.rangeCount === 0) return null;
+            let node = sel.getRangeAt(0).startContainer;
+            let elem = node.nodeType === 1 ? node : node.parentElement;
+            while (elem && elem.parentElement !== editor && elem !== editor) {
+                elem = elem.parentElement;
+            }
+            if (elem && elem.parentElement === editor && /^(H1|H2|H3)$/.test(elem.tagName)) {
+                const isTitle = (elem === editor.querySelector('h1:first-child'));
+                document.execCommand('insertParagraph', false, null);
+                document.execCommand('formatBlock', false, '<p>');
+                return isTitle ? 'title' : 'heading';
+            }
+            return null;
+        };
+
+        window.isAtTopOfBody = function(editor) {
+            const sel = window.getSelection();
+            if (!sel || sel.rangeCount === 0) return false;
+            let node = sel.getRangeAt(0).startContainer;
+            let elem = node.nodeType === 1 ? node : node.parentElement;
+            while (elem && elem.parentElement !== editor && elem !== editor) {
+                elem = elem.parentElement;
+            }
+            if (!elem || elem.parentElement !== editor) return false;
+            const h1 = editor.querySelector('h1:first-child');
+            return !!(h1 && elem === h1.nextElementSibling);
+        };
+
+        window.isAtStartOfFirstBody = function(editor) {
+            const sel = window.getSelection();
+            if (!sel || sel.rangeCount === 0) return false;
+            const range = sel.getRangeAt(0);
+            if (range.startOffset !== 0) return false;
+            let node = range.startContainer;
+            let elem = node.nodeType === 1 ? node : node.parentElement;
+            while (elem && elem.parentElement !== editor && elem !== editor) {
+                elem = elem.parentElement;
+            }
+            if (!elem || elem.parentElement !== editor) return false;
+            const h1 = editor.querySelector('h1:first-child');
+            return !!(h1 && elem === h1.nextElementSibling);
+        };
+
+        window.focusTitleEnd = function(editor) {
+            const h1 = editor.querySelector('h1:first-child');
+            if (!h1) return;
+            const range = document.createRange();
+            const sel = window.getSelection();
+            range.selectNodeContents(h1);
+            range.collapse(false);
+            sel.removeAllRanges();
+            sel.addRange(range);
+        };
+
+        window.queryActiveFormats = function() {
+            const active = [];
+            if (document.queryCommandState('bold')) active.push('bold');
+            if (document.queryCommandState('italic')) active.push('italic');
+            if (document.queryCommandState('underline')) active.push('underline');
+            if (document.queryCommandState('strikeThrough')) active.push('strikeThrough');
+            if (document.queryCommandState('insertUnorderedList')) active.push('insertUnorderedList');
+            if (document.queryCommandState('insertOrderedList')) active.push('insertOrderedList');
+
+            const sel = window.getSelection();
+            if (sel && sel.rangeCount > 0) {
+                let node = sel.getRangeAt(0).startContainer;
+                let elem = node.nodeType === 1 ? node : node.parentElement;
+                while (elem && !elem.classList?.contains('nil-editor')) {
+                    const tag = elem.tagName;
+                    if (tag === 'H1') { active.push('H1'); break; }
+                    if (tag === 'H2') { active.push('H2'); break; }
+                    if (tag === 'H3') { active.push('H3'); break; }
+                    if (elem.querySelector && elem.querySelector('input[type="checkbox"]')) {
+                        active.push('checkbox');
+                        break;
+                    }
+                    elem = elem.parentElement;
+                }
+            }
+            return active;
+        };
+
+        document.addEventListener('change', function(e) {
+            if (e.target && e.target.tagName === 'INPUT' && e.target.type === 'checkbox') {
+                if (e.target.checked) {
+                    e.target.setAttribute('checked', 'checked');
+                } else {
+                    e.target.removeAttribute('checked');
+                }
+                const editor = e.target.closest('.nil-editor');
+                if (editor) {
+                    editor.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+            }
+        });
+    </script>
+</head>
+<body class="bg-zinc-950 text-zinc-100 h-full w-full overflow-hidden select-none m-0 p-0" style="opacity:0">
+</body>
+</html>

@@ -1,11 +1,11 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-cli/schema.json",
-  "productName": "glint",
+  "productName": "nil-shot",
   "version": "0.5.0",
-  "identifier": "com.glint.app",
+  "identifier": "com.nil.shot",
   "build": {
     "devUrl": "http://localhost:1420",
-    "frontendDist": "../../frontend/dist"
+    "frontendDist": "../../frontend/nil-shot/dist"
   },
   "app": {
     "withGlobalTauri": true,
@@ -25,7 +25,7 @@
       "icons/icon.png"
     ],
     "shortDescription": "Capturador y editor de pantalla rápido para Linux",
-    "longDescription": "Glint es una herramienta moderna de captura, anotación, desenfoque y OCR para Linux.",
+    "longDescription": "nil-shot es una herramienta moderna de captura, anotación, desenfoque y OCR para Linux.",
     "category": "Utility",
     "linux": {
       "deb": {

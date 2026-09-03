@@ -51,7 +51,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'Glint ${{ github.ref_name }}'
+          releaseName: 'nil-shot ${{ github.ref_name }}'
           releaseBody: 'Descarga el paquete para tu distribución (.AppImage, .deb o .rpm).'
           releaseDraft: false
           prerelease: false
+          projectPath: crates/nil-shot

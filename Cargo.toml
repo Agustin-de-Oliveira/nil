@@ -1,3 +1,4 @@
 [workspace]
-members = ["crates/nil-core", "crates/nil-shot"]
+members = ["crates/nil-core", "crates/nil-shot", "crates/nil-clip", "crates/nil-notes"]
+exclude = ["frontend/nil-shot", "frontend/nil-clip", "frontend/nil-notes"]
 resolver = "2"

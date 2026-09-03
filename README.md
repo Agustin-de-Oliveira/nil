@@ -1,4 +1,4 @@
-# Glint
+# nil-shot
 
 Herramienta ligera, rápida y moderna de captura y edición de pantalla para Linux, construida con **Rust**, **Tauri 2**, **Leptos (WASM)** y **Tailwind CSS**.
 
@@ -46,18 +46,18 @@ sudo pacman -S grim slurp wl-clipboard tesseract tesseract-data-eng tesseract-da
 ### Opción 1: Descargar el paquete ejecutable (Recomendado)
 Dirigite a la sección de **[Releases](https://github.com/)** del repositorio y descargá el archivo según tu distribución:
 
-- **Universal (Cualquier distribución Linux)**: Descargá `Glint_x86_64.AppImage`. Dale permisos de ejecución y abrilo directamente con doble clic:
+- **Universal (Cualquier distribución Linux)**: Descargá `nil-shot_x86_64.AppImage`. Dale permisos de ejecución y abrilo directamente con doble clic:
   ```bash
-  chmod +x Glint_x86_64.AppImage
-  ./Glint_x86_64.AppImage
+  chmod +x nil-shot_x86_64.AppImage
+  ./nil-shot_x86_64.AppImage
   ```
-- **Ubuntu / Debian / Pop!_OS / Linux Mint**: Descargá `glint_amd64.deb` e instalalo con doble clic o con:
+- **Ubuntu / Debian / Pop!_OS / Linux Mint**: Descargá `nil-shot_amd64.deb` e instalalo con doble clic o con:
   ```bash
-  sudo dpkg -i glint_amd64.deb
+  sudo dpkg -i nil-shot_amd64.deb
   ```
-- **Fedora / openSUSE / RHEL**: Descargá `glint_x86_64.rpm` e instalalo con doble clic o con:
+- **Fedora / openSUSE / RHEL**: Descargá `nil-shot_x86_64.rpm` e instalalo con doble clic o con:
   ```bash
-  sudo rpm -i glint_x86_64.rpm
+  sudo rpm -i nil-shot_x86_64.rpm
   ```
 
 ---
@@ -72,26 +72,26 @@ cd frontend
 trunk build --release
 
 # 2. Compilar el binario optimizado en Rust
-cd ../src-tauri
-cargo build --release
+cd ..
+cargo build -p nil-shot --release
 ```
 
 Instalar el binario generado localmente:
 ```bash
 mkdir -p ~/.local/bin
-cp src-tauri/target/release/glint ~/.local/bin/glint
-chmod +x ~/.local/bin/glint
+cp target/release/nil-shot ~/.local/bin/nil-shot
+chmod +x ~/.local/bin/nil-shot
 ```
 
 Crear el lanzador `.desktop`:
 
 ```bash
-cat << 'EOF' > ~/.local/share/applications/glint.desktop
+cat << 'EOF' > ~/.local/share/applications/nil-shot.desktop
 [Desktop Entry]
-Name=Glint
+Name=nil-shot
 GenericName=Capturador de pantalla
 Comment=Captura rápida, anotación, blur y OCR
-Exec=glint --area
+Exec=nil-shot --area
 Icon=accessories-screenshot
 Terminal=false
 Type=Application
@@ -106,14 +106,14 @@ EOF
 ### En Hyprland (`~/.config/hypr/hyprland/keybinds.lua`):
 
 ```lua
--- Atajos para Glint
-create_bind(vars.kbScreenshot, hl.dsp.exec_cmd("glint --press"), locked)
-create_bind(vars.kbScreenshot, hl.dsp.exec_cmd("glint --release"), { locked = true, release = true })
-create_bind(vars.kbScreenshotFreeze, hl.dsp.exec_cmd("glint --full"), locked)
-create_bind(vars.kbScreenshotRegion, hl.dsp.exec_cmd("glint --area"), locked)
+-- Atajos para nil-shot
+create_bind(vars.kbScreenshot, hl.dsp.exec_cmd("nil-shot --press"), locked)
+create_bind(vars.kbScreenshot, hl.dsp.exec_cmd("nil-shot --release"), { locked = true, release = true })
+create_bind(vars.kbScreenshotFreeze, hl.dsp.exec_cmd("nil-shot --full"), locked)
+create_bind(vars.kbScreenshotRegion, hl.dsp.exec_cmd("nil-shot --area"), locked)
 ```
 
 ### En GNOME:
 En **Configuración** -> **Teclado** -> **Atajos personalizados**:
-- **Comando**: `glint --area`
+- **Comando**: `nil-shot --area`
 - **Atajo**: `Print` o `Super + Shift + S`

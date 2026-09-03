@@ -143,7 +143,7 @@ fn save_image(data_base64: Option<String>) -> Result<String, String> {
     std::thread::spawn(move || {
         let output = Command::new("notify-send")
             .arg("-a")
-            .arg("Glint")
+            .arg("nil-shot")
             .arg("-i")
             .arg(&target_path_for_thread)
             .arg("-A")
@@ -306,7 +306,7 @@ fn launch_tauri(image_path: Option<PathBuf>, config_path: PathBuf) {
 
             let _window =
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-                    .title("Glint")
+                    .title("nil-shot")
                     .inner_size(win_w, win_h)
                     .center()
                     .decorations(false)
