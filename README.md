@@ -1,63 +1,80 @@
+<div align="center">
+
 # nil
 
-A suite of focused, lightweight desktop utilities for Linux. Built with Rust, Tauri 2, Leptos (WASM), and Tailwind CSS.
+**Suite minimalista de herramientas nativas para Linux.**
+
+nil es un ecosistema de aplicaciones de escritorio ligeras, independientes y con foco en el teclado, construidas con **Rust**, **Tauri 2**, **Leptos (WASM)** y **Tailwind CSS**. Diseñadas para iniciar al instante, integrarse de forma fluida con Wayland y X11, y mantenerse fuera de tu camino.
+
+[Aplicaciones](#aplicaciones) · [Stack Tecnológico](#stack-tecnológico) · [Instalación](#instalación) · [Guía de Desarrollo](CONTRIBUTING.md)
+
+</div>
 
 ---
 
-## Overview
+## ¿Qué es nil?
 
-nil is an ecosystem of single-purpose, unobtrusive desktop applications designed for speed, visual coherence, and minimal resource usage. Each tool operates independently while sharing a unified architecture and design language.
+La mayoría de las herramientas de escritorio modernas sufren de sobrecarga: aplicaciones lentas montadas sobre runtimes pesados que consumen cientos de megabytes de memoria para tareas puntuales del día a día.
 
-Compatible natively with Wayland compositors (Hyprland, Sway, GNOME) and X11 sessions.
+nil propone una alternativa: **utilidades de un solo propósito, rápidas, visualmente coherentes y con consumo ocioso despreciable**. Cada herramienta de la suite opera de forma autónoma con interfaces limpias, soporte nativo de atajos de teclado y una arquitectura modular compartida.
 
 ---
 
-## Applications
+## Aplicaciones
 
 ### nil-shot
-Fast and interactive screen capture and annotation tool.
-- Instant focused-output capture or interactive area selection.
-- Precision annotation tools: freehand pen, highlighter, arrows, rectangles, and ellipses.
-- Sensitive information redaction with dynamic blur.
-- On-screen OCR text and entity extraction (URLs, colors) with one-click copy.
-- Full undo/redo history, canvas panning, and zoom magnifier.
+Herramienta de captura y anotación interactiva de pantalla.
+- **Captura rápida**: captura directa al portapapeles con toque breve o selección de área con pulsación mantenida.
+- **Herramientas de anotación**: trazo libre, resaltador translúcido, flechas y formas geométricas (rectángulos y círculos).
+- **Censura de información**: desenfoque dinámico (blur) para ocultar datos sensibles antes de compartir.
+- **OCR interactivo**: extracción de texto desde la imagen con un clic mediante Tesseract, con detección de URLs y códigos de color.
+- **Control de lienzo**: zoom con rueda del mouse, paneo fluido (`Espacio + Arrastre`), lupa de píxeles e historial completo de deshacer/rehacer.
 
 ### nil-clip
-Minimalist clipboard history manager.
-- Low-latency clipboard monitoring and persistent history.
-- Real-time fuzzy filtering and search across copied snippets.
-- Syntax-aware previews for code, links, and formatted text.
-- Keyboard-first interaction model for rapid paste and retrieval.
+Gestor de historial de portapapeles de baja latencia.
+- **Monitoreo eficiente**: registro automático y persistente del portapapeles con bajo impacto en recursos.
+- **Búsqueda difusa (fuzzy search)**: filtrado instantáneo en tiempo real sobre el historial de copiado.
+- **Previsualización contextual**: detección automática y formateo de fragmentos de código, enlaces y texto plano.
+- **Flujo orientado a teclado**: navegación rápida con flechas y copiado inmediato al presionar Enter.
 
 ### nil-notes
-Distraction-free rich-text scratchpad and note editor.
-- Fluid document hierarchy with automatic heading-to-body transitions.
-- Markdown-compatible formatting: bold, italic, lists, and custom checklists.
-- Reactive title synchronization with multi-tab persistence.
-- Clean typography and adaptive dark/light interface.
+Bloc de notas flotante y editor sin distracciones.
+- **Jerarquía fluida de título**: el encabezado inicial se desvanece suavemente hacia arriba al presionar Enter, cediendo toda la pantalla al contenido.
+- **Recuperación intuitiva**: volver hacia arriba con las flechas o tecla de borrado restaura el título para editarlo.
+- **Formato rico y listas**: compatibilidad con negrita, cursiva, subrayado, tachado y casillas de verificación interactivas.
+- **Sincronización en tiempo real**: títulos de pestañas reactivos derivados de la primera línea y guardado automático transparente.
 
 ---
 
-## Design Principles
+## Stack Tecnológico
 
-- **Speed and Efficiency**: Native Rust core ensuring near-instantaneous startup times and negligible idle resource usage.
-- **Unobtrusive UX**: Keyboard-centric workflows designed to appear on demand and dismiss without friction.
-- **Visual Coherence**: Shared aesthetic standards, typography, and layout proportions across all tools in the suite.
-
----
-
-## Installation
-
-Pre-built packages (AppImage, deb, rpm) and standalone binaries are available on the [Releases](https://github.com/Agustin-de-Oliveira/glint/releases) page.
-
----
-
-## Development
-
-For instructions on building from source, setting up the local environment, and contributing, see [CONTRIBUTING.md](CONTRIBUTING.md).
+| Capa | Tecnología |
+| :--- | :--- |
+| Lenguaje Principal | Rust (Edición 2021) |
+| Runtime de Escritorio | Tauri v2 |
+| Frontend Reactivo | Leptos 0.7 (CSR compilado a WebAssembly) |
+| Motor de Estilos | Tailwind CSS 4 |
+| Bundler WASM | Trunk |
+| Reconocimiento de Texto (OCR) | Tesseract OCR |
+| Gestión de Portapapeles | wl-clipboard (Wayland) / xclip (X11) |
+| Captura de Pantalla | grim + slurp (Wayland wlroots) / GNOME / maim (X11) |
+| Notificaciones de Sistema | libnotify (`notify-send`) |
+| Arquitectura del Proyecto | Monorepo modular (`crates/` + `frontend/`) |
 
 ---
 
-## License
+## Instalación
 
-This project is licensed under the MIT License.
+Los paquetes ejecutables precompilados (AppImage, deb, rpm) y binarios independientes están disponibles en la sección de **[Releases](https://github.com/Agustin-de-Oliveira/nil/releases)** del repositorio.
+
+---
+
+## Desarrollo y Contribución
+
+Para instrucciones sobre compilación desde el código fuente, dependencias del sistema, uso del `Makefile` y estándares de código, consultá la **[Guía de Contribución](CONTRIBUTING.md)**.
+
+---
+
+## Licencia
+
+Este proyecto se distribuye bajo los términos de la Licencia MIT.
