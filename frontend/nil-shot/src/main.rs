@@ -1,4 +1,8 @@
 mod app;
+mod canvas;
+mod hit_test;
+mod model;
+mod ocr;
 
 use app::App;
 use leptos::prelude::*;

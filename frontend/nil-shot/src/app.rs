@@ -1,7 +1,10 @@
+use crate::canvas::*;
+use crate::hit_test::*;
+use crate::model::*;
+use crate::ocr::*;
 use leptos::ev;
 use leptos::html::Canvas;
 use leptos::prelude::*;
-use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
@@ -11,293 +14,10 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, HtmlImageElement, KeyboardEvent, MouseEvent, WheelEvent};
 
-const COLOR_LIST: &[(&str, &str)] = &[
-    ("#e06c75", "#e06c75"),
-    ("#e59866", "#e59866"),
-    ("#e5c07b", "#e5c07b"),
-    ("#98c379", "#98c379"),
-    ("#56b6c2", "#56b6c2"),
-    ("#61afef", "#61afef"),
-    ("#c678dd", "#c678dd"),
-    ("#e4e4e7", "#e4e4e7"),
-    ("#27272a", "#27272a"),
-];
-
-const WIDTHS: &[(f64, &str)] = &[
-    (2.5, "h-[2px]"),
-    (5.0, "h-[4px]"),
-    (10.0, "h-[7px]"),
-    (18.0, "h-[12px]"),
-];
-
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_name = callTauri, catch)]
     async fn call_tauri(cmd: &str, args: JsValue) -> Result<JsValue, JsValue>;
-}
-
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ResizeArgs {
-    pub width: f64,
-    pub height: f64,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct CopyArgs {
-    #[serde(rename = "dataBase64")]
-    pub data_base64: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct CopyTextArgs {
-    pub text: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct SaveArgs {
-    #[serde(rename = "dataBase64")]
-    pub data_base64: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct OcrArgs {
-    #[serde(rename = "dataBase64")]
-    pub data_base64: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct OpenUrlArgs {
-    pub url: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct OcrEntity {
-    pub kind: String,
-    pub value: String,
-    pub x: f64,
-    pub y: f64,
-    pub w: f64,
-    pub h: f64,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct OcrBlock {
-    pub text: String,
-    pub x: f64,
-    pub y: f64,
-    pub w: f64,
-    pub h: f64,
-    #[serde(default)]
-    pub entities: Vec<OcrEntity>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct GalleryItem {
-    pub path: String,
-    pub filename: String,
-    pub timestamp: u64,
-    pub width: u32,
-    pub height: u32,
-    pub preview_base64: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct GalleryResponse {
-    pub items: Vec<GalleryItem>,
-    pub total: usize,
-    pub has_more: bool,
-}
-
-#[derive(Serialize)]
-pub struct GetGalleryArgs {
-    pub offset: usize,
-    pub limit: usize,
-}
-
-#[derive(Serialize)]
-pub struct LoadGalleryArgs {
-    pub path: String,
-}
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum Tool {
-    Pen,
-    Highlighter,
-    Arrow,
-    Rectangle,
-    Circle,
-    Blur,
-    Picker,
-}
-
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum CropHandle {
-    TopLeft,
-    Top,
-    TopRight,
-    Right,
-    BottomRight,
-    Bottom,
-    BottomLeft,
-    Left,
-}
-
-#[derive(Clone, Debug)]
-pub struct Point {
-    pub x: f64,
-    pub y: f64,
-}
-
-#[derive(Clone, Debug)]
-pub struct Rect {
-    pub x: f64,
-    pub y: f64,
-    pub w: f64,
-    pub h: f64,
-}
-
-#[derive(Clone, Debug)]
-pub enum DrawingItem {
-    Freehand {
-        points: Vec<Point>,
-        color: String,
-        width: f64,
-        is_highlighter: bool,
-    },
-    Arrow {
-        start: Point,
-        end: Point,
-        color: String,
-        width: f64,
-    },
-    Rectangle {
-        start: Point,
-        end: Point,
-        color: String,
-        width: f64,
-    },
-    Circle {
-        start: Point,
-        end: Point,
-        color: String,
-        width: f64,
-    },
-    Blur {
-        start: Point,
-        end: Point,
-    },
-}
-
-#[derive(Clone, Debug)]
-pub enum HistoryAction {
-    Add(DrawingItem),
-    Clear(Vec<DrawingItem>),
-    Crop {
-        prev_image_data: String,
-        prev_items: Vec<DrawingItem>,
-        prev_width: u32,
-        prev_height: u32,
-        new_image_data: String,
-        new_items: Vec<DrawingItem>,
-        new_width: u32,
-        new_height: u32,
-    },
-}
-
-const COMMON_ASPECT_RATIOS: &[((u32, u32), f64)] = &[
-    ((16, 9), 16.0 / 9.0),
-    ((16, 10), 16.0 / 10.0),
-    ((4, 3), 4.0 / 3.0),
-    ((3, 2), 3.0 / 2.0),
-    ((1, 1), 1.0),
-    ((9, 16), 9.0 / 16.0),
-    ((4, 5), 4.0 / 5.0),
-    ((3, 4), 3.0 / 4.0),
-    ((2, 3), 2.0 / 3.0),
-    ((21, 9), 21.0 / 9.0),
-];
-
-fn snap_crop_ratio(
-    mut min_x: f64,
-    mut min_y: f64,
-    mut max_x: f64,
-    mut max_y: f64,
-    handle: CropHandle,
-    total_w: f64,
-    total_h: f64,
-) -> (f64, f64, f64, f64, bool) {
-    let cur_w = max_x - min_x;
-    let cur_h = max_y - min_y;
-    if cur_w < 20.0 || cur_h < 20.0 {
-        return (min_x, min_y, max_x, max_y, false);
-    }
-    let cur_ratio = cur_w / cur_h;
-
-    let mut best_ratio = COMMON_ASPECT_RATIOS[0].1;
-    let mut min_diff = f64::MAX;
-
-    for &(_, target_ratio) in COMMON_ASPECT_RATIOS {
-        let diff = (cur_ratio - target_ratio).abs();
-        if diff < min_diff {
-            min_diff = diff;
-            best_ratio = target_ratio;
-        }
-    }
-
-    let expected_w = cur_h * best_ratio;
-    let expected_h = cur_w / best_ratio;
-
-    match handle {
-        CropHandle::Right | CropHandle::BottomRight | CropHandle::TopRight => {
-            let snapped_w = expected_w.min(total_w - min_x);
-            max_x = min_x + snapped_w;
-        }
-        CropHandle::Left | CropHandle::BottomLeft | CropHandle::TopLeft => {
-            let snapped_w = expected_w.min(max_x);
-            min_x = max_x - snapped_w;
-        }
-        CropHandle::Bottom => {
-            let snapped_h = expected_h.min(total_h - min_y);
-            max_y = min_y + snapped_h;
-        }
-        CropHandle::Top => {
-            let snapped_h = expected_h.min(max_y);
-            min_y = max_y - snapped_h;
-        }
-    }
-    (min_x, min_y, max_x, max_y, true)
-}
-
-fn calculate_aspect_ratio_str(w: f64, h: f64) -> String {
-    let w_u = w.round() as u32;
-    let h_u = h.round() as u32;
-    if w_u == 0 || h_u == 0 {
-        return String::new();
-    }
-    let ratio = w / h;
-    for &((rw, rh), val) in COMMON_ASPECT_RATIOS {
-        if (ratio - val).abs() < 0.035 {
-            return format!("{} × {} · {}:{}", w_u, h_u, rw, rh);
-        }
-    }
-    fn gcd(mut a: u32, mut b: u32) -> u32 {
-        while b != 0 {
-            let t = b;
-            b = a % b;
-            a = t;
-        }
-        a
-    }
-    let g = gcd(w_u, h_u);
-    let rw = w_u / g;
-    let rh = h_u / g;
-    if rw <= 16 && rh <= 16 {
-        format!("{} × {} · {}:{}", w_u, h_u, rw, rh)
-    } else {
-        format!("{} × {}", w_u, h_u)
-    }
 }
 
 async fn sleep_ms(ms: i32) {
@@ -308,47 +28,6 @@ async fn sleep_ms(ms: i32) {
             .unwrap();
     });
     let _ = JsFuture::from(promise).await;
-}
-
-fn detect_url(text: &str) -> Option<String> {
-    for word in text.split_whitespace() {
-        let clean = word.trim_matches(|c: char| {
-            c == '"' || c == '\'' || c == '`' || c == '(' || c == ')' || c == '[' || c == ']' || c == '<' || c == '>' || c == '{' || c == '}' || c == ',' || c == ';' || c == '.'
-        });
-        if clean.starts_with("http://") || clean.starts_with("https://") {
-            return Some(clean.to_string());
-        }
-        if clean.starts_with("www.") {
-            return Some(format!("https://{}", clean));
-        }
-        if (clean.contains(".com") || clean.contains(".org") || clean.contains(".io") || clean.contains(".dev") || clean.contains(".net") || clean.contains(".app") || clean.contains(".ar"))
-            && clean.contains('.')
-            && !clean.contains('@')
-            && clean.len() >= 4
-        {
-            return Some(format!("https://{}", clean));
-        }
-    }
-    None
-}
-
-fn detect_color(text: &str) -> Option<String> {
-    for word in text.split_whitespace() {
-        let clean = word.trim_matches(|c: char| {
-            c == '"' || c == '\'' || c == '`' || c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}' || c == ',' || c == ';' || c == ':'
-        });
-        if clean.starts_with('#') {
-            let hex = &clean[1..];
-            if (hex.len() == 3 || hex.len() == 4 || hex.len() == 6 || hex.len() == 8)
-                && hex.chars().all(|c| c.is_ascii_hexdigit())
-            {
-                return Some(clean.to_string());
-            }
-        } else if (clean.starts_with("rgb(") || clean.starts_with("rgba(") || clean.starts_with("hsl(") || clean.starts_with("hsla(")) && clean.ends_with(')') {
-            return Some(clean.to_string());
-        }
-    }
-    None
 }
 
 fn format_gallery_date(ts: u64) -> String {
@@ -403,6 +82,7 @@ pub fn App() -> impl IntoView {
     let (save_success_gen, set_save_success_gen) = signal(0u32);
     let (image_dimensions, set_image_dimensions) = signal((1.0f64, 1.0f64));
 
+    let bg_canvas_ref = NodeRef::<Canvas>::new();
     let canvas_ref = NodeRef::<Canvas>::new();
     let loupe_canvas_ref = NodeRef::<Canvas>::new();
     let preview_scroll_ref = NodeRef::<leptos::html::Div>::new();
@@ -410,16 +90,41 @@ pub fn App() -> impl IntoView {
     let items = Rc::new(RefCell::new(Vec::<DrawingItem>::new()));
     let history = Rc::new(RefCell::new(Vec::<HistoryAction>::new()));
     let future = Rc::new(RefCell::new(Vec::<HistoryAction>::new()));
-    let is_drawing = Rc::new(RefCell::new(false));
-    let is_panning = Rc::new(RefCell::new(false));
-    let pan_start_mouse = Rc::new(RefCell::new((0.0f64, 0.0f64)));
-    let pan_initial = Rc::new(RefCell::new((0.0f64, 0.0f64)));
-    let start_point = Rc::new(RefCell::new(None::<Point>));
-    let current_points = Rc::new(RefCell::new(Vec::<Point>::new()));
+    let session = Rc::new(RefCell::new(CanvasSession::default()));
+    let (selected_freehand_slot, set_selected_freehand_slot) = signal(Tool::Pen);
+    let (selected_shape_slot, set_selected_shape_slot) = signal(Tool::Rectangle);
+    let (is_hovering_shape, set_is_hovering_shape) = signal(false);
+    let (is_dragging_shape, set_is_dragging_shape) = signal(false);
+    let (forced_open_group, set_forced_open_group) = signal(None::<u8>);
+    let open_timer_handle = Rc::new(RefCell::new(None::<i32>));
+    let (selected_item_index, set_selected_item_index) = signal(None::<usize>);
+    let (selected_item_info, set_selected_item_info) = signal(None::<(f64, f64, f64, f64, Option<String>, Option<f64>)>);
+    let (selection_gen, set_selection_gen) = signal(0u32);
+    let (trigger_change_color, set_trigger_change_color) = signal(None::<String>);
+    let (trigger_cycle_width, set_trigger_cycle_width) = signal(0u32);
+    let (trigger_duplicate, set_trigger_duplicate) = signal(0u32);
+    let (trigger_delete, set_trigger_delete) = signal(0u32);
 
-    let crop_handle_state = Rc::new(RefCell::new(None::<CropHandle>));
-    let crop_start_mouse = Rc::new(RefCell::new(Point { x: 0.0, y: 0.0 }));
-    let current_crop_rect = Rc::new(RefCell::new(Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }));
+    let trigger_forced_open = {
+        let timer_handle = open_timer_handle.clone();
+        Rc::new(move |group_id: u8| {
+            set_forced_open_group.set(Some(group_id));
+            if let Some(h) = timer_handle.borrow_mut().take() {
+                if let Some(win) = web_sys::window() {
+                    win.clear_timeout_with_handle(h);
+                }
+            }
+            if let Some(win) = web_sys::window() {
+                let cb = Closure::<dyn FnMut()>::wrap(Box::new(move || {
+                    set_forced_open_group.set(None);
+                }));
+                if let Ok(h) = win.set_timeout_with_callback_and_timeout_and_arguments_0(cb.as_ref().unchecked_ref(), 1800) {
+                    *timer_handle.borrow_mut() = Some(h);
+                }
+                cb.forget();
+            }
+        })
+    };
 
     let notify = move |msg: String| {
         let gen = toast_gen.get_untracked().wrapping_add(1);
@@ -443,65 +148,33 @@ pub fn App() -> impl IntoView {
         set_show_gallery.set(false);
     };
 
-    let draw_arrow_head = |ctx: &CanvasRenderingContext2d, from: &Point, to: &Point, width: f64| {
-        let head_len = (width * 3.5).max(12.0);
-        let dx = to.x - from.x;
-        let dy = to.y - from.y;
-        let angle = dy.atan2(dx);
 
-        ctx.begin_path();
-        ctx.move_to(to.x, to.y);
-        ctx.line_to(
-            to.x - head_len * (angle - std::f64::consts::PI / 6.0).cos(),
-            to.y - head_len * (angle - std::f64::consts::PI / 6.0).sin(),
-        );
-        ctx.line_to(
-            to.x - head_len * (angle + std::f64::consts::PI / 6.0).cos(),
-            to.y - head_len * (angle + std::f64::consts::PI / 6.0).sin(),
-        );
-        ctx.close_path();
-        ctx.fill();
-    };
+    let redraw_bg = {
+        let bg_canvas_ref = bg_canvas_ref.clone();
+        let base_image = base_image.clone();
+        Rc::new(move || {
+            let canvas = match bg_canvas_ref.get() {
+                Some(c) => c,
+                None => return,
+            };
+            let ctx = match canvas
+                .get_context("2d")
+                .ok()
+                .flatten()
+                .and_then(|c| c.dyn_into::<CanvasRenderingContext2d>().ok())
+            {
+                Some(ctx) => ctx,
+                None => return,
+            };
 
-    let apply_pixelate = |ctx: &CanvasRenderingContext2d, img: &HtmlImageElement, x: f64, y: f64, w: f64, h: f64| {
-        if w <= 2.0 || h <= 2.0 {
-            return;
-        }
-        let block_size = 12.0;
-        let small_w = (w / block_size).max(1.0).round();
-        let small_h = (h / block_size).max(1.0).round();
+            let width = canvas.width() as f64;
+            let height = canvas.height() as f64;
+            ctx.clear_rect(0.0, 0.0, width, height);
 
-        let doc = match web_sys::window().and_then(|win| win.document()) {
-            Some(d) => d,
-            None => return,
-        };
-        let off_canvas: HtmlCanvasElement = match doc.create_element("canvas").ok().and_then(|el| el.dyn_into().ok()) {
-            Some(c) => c,
-            None => return,
-        };
-        off_canvas.set_width(small_w as u32);
-        off_canvas.set_height(small_h as u32);
-
-        let off_ctx = match off_canvas.get_context("2d").ok().flatten().and_then(|c| c.dyn_into::<CanvasRenderingContext2d>().ok()) {
-            Some(c) => c,
-            None => return,
-        };
-
-        off_ctx.set_image_smoothing_enabled(true);
-        let _ = off_ctx.draw_image_with_html_image_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-            img,
-            x, y, w, h,
-            0.0, 0.0, small_w, small_h,
-        );
-
-        ctx.save();
-        ctx.set_image_smoothing_enabled(false);
-        let _ = ctx.draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-            &off_canvas,
-            0.0, 0.0, small_w, small_h,
-            x, y, w, h,
-        );
-        ctx.restore();
+            if let Some(ref img) = *base_image.borrow() {
+                let _ = ctx.draw_image_with_html_image_element(img, 0.0, 0.0);
+            }
+        })
     };
 
     let redraw_canvas = {
@@ -526,10 +199,6 @@ pub fn App() -> impl IntoView {
             let width = canvas.width() as f64;
             let height = canvas.height() as f64;
             ctx.clear_rect(0.0, 0.0, width, height);
-
-            if let Some(ref img) = *base_image.borrow() {
-                let _ = ctx.draw_image_with_html_image_element(img, 0.0, 0.0);
-            }
 
             let item_list = items.borrow().clone();
             for item in item_list.iter() {
@@ -568,11 +237,21 @@ pub fn App() -> impl IntoView {
                             ctx.begin_path();
                             let _ = ctx.arc(points[0].x, points[0].y, *width / 2.0, 0.0, std::f64::consts::PI * 2.0);
                             ctx.fill();
+                        } else if points.len() == 2 {
+                            ctx.begin_path();
+                            ctx.move_to(points[0].x, points[0].y);
+                            ctx.line_to(points[1].x, points[1].y);
+                            ctx.stroke();
                         } else {
                             ctx.begin_path();
                             ctx.move_to(points[0].x, points[0].y);
-                            for pt in points.iter().skip(1) {
-                                ctx.line_to(pt.x, pt.y);
+                            for i in 1..points.len() - 1 {
+                                let mid_x = (points[i].x + points[i + 1].x) / 2.0;
+                                let mid_y = (points[i].y + points[i + 1].y) / 2.0;
+                                ctx.quadratic_curve_to(points[i].x, points[i].y, mid_x, mid_y);
+                            }
+                            if let Some(last) = points.last() {
+                                ctx.line_to(last.x, last.y);
                             }
                             ctx.stroke();
                         }
@@ -589,11 +268,7 @@ pub fn App() -> impl IntoView {
                         ctx.set_fill_style_str(color);
                         ctx.set_line_width(*width);
                         ctx.set_line_cap("round");
-                        ctx.begin_path();
-                        ctx.move_to(start.x, start.y);
-                        ctx.line_to(end.x, end.y);
-                        ctx.stroke();
-                        draw_arrow_head(&ctx, start, end, *width);
+                        draw_arrow(&ctx, start, end, *width);
                         ctx.restore();
                     }
                     DrawingItem::Rectangle {
@@ -606,11 +281,41 @@ pub fn App() -> impl IntoView {
                         let y = start.y.min(end.y);
                         let w = (start.x - end.x).abs();
                         let h = (start.y - end.y).abs();
+                        let r = 8.0f64.min(w / 2.0).min(h / 2.0);
                         ctx.save();
                         ctx.set_stroke_style_str(color);
                         ctx.set_line_width(*width);
+                        ctx.set_line_cap("round");
                         ctx.set_line_join("round");
-                        ctx.stroke_rect(x, y, w, h);
+                        ctx.begin_path();
+                        ctx.move_to(x + r, y);
+                        ctx.line_to(x + w - r, y);
+                        ctx.quadratic_curve_to(x + w, y, x + w, y + r);
+                        ctx.line_to(x + w, y + h - r);
+                        ctx.quadratic_curve_to(x + w, y + h, x + w - r, y + h);
+                        ctx.line_to(x + r, y + h);
+                        ctx.quadratic_curve_to(x, y + h, x, y + h - r);
+                        ctx.line_to(x, y + r);
+                        ctx.quadratic_curve_to(x, y, x + r, y);
+                        ctx.close_path();
+                        ctx.stroke();
+                        ctx.restore();
+                    }
+                    DrawingItem::Line {
+                        start,
+                        end,
+                        color,
+                        width,
+                    } => {
+                        ctx.save();
+                        ctx.set_stroke_style_str(color);
+                        ctx.set_line_width(*width);
+                        ctx.set_line_cap("round");
+                        ctx.set_line_join("round");
+                        ctx.begin_path();
+                        ctx.move_to(start.x, start.y);
+                        ctx.line_to(end.x, end.y);
+                        ctx.stroke();
                         ctx.restore();
                     }
                     DrawingItem::Circle {
@@ -626,6 +331,8 @@ pub fn App() -> impl IntoView {
                         ctx.save();
                         ctx.set_stroke_style_str(color);
                         ctx.set_line_width(*width);
+                        ctx.set_line_cap("round");
+                        ctx.set_line_join("round");
                         ctx.begin_path();
                         let _ = ctx.ellipse(cx, cy, rx, ry, 0.0, 0.0, std::f64::consts::TAU);
                         ctx.stroke();
@@ -633,21 +340,214 @@ pub fn App() -> impl IntoView {
                     }
                 }
             }
+
+            if let Some(sel_idx) = selected_item_index.get_untracked() {
+                let itms = items.borrow();
+                if let Some(sel_item) = itms.get(sel_idx) {
+                    let (bx, by, bw, bh) = get_item_bounds(sel_item);
+                    let pad = 6.0;
+                    ctx.save();
+                    ctx.set_stroke_style_str("rgba(255, 255, 255, 0.45)");
+                    ctx.set_line_width(1.0);
+                    let dash = js_sys::Array::new();
+                    dash.push(&wasm_bindgen::JsValue::from_f64(4.0));
+                    dash.push(&wasm_bindgen::JsValue::from_f64(4.0));
+                    let _ = ctx.set_line_dash(&dash);
+                    ctx.stroke_rect(bx - pad, by - pad, bw + pad * 2.0, bh + pad * 2.0);
+                    ctx.restore();
+                }
+            }
         })
     };
 
+    let update_selected_info = {
+        let items = items.clone();
+        Rc::new(move || {
+            if let Some(idx) = selected_item_index.get_untracked() {
+                let itms = items.borrow();
+                if let Some(item) = itms.get(idx) {
+                    let (bx, by, bw, bh) = get_item_bounds(item);
+                    let c = match item {
+                        DrawingItem::Freehand { color, .. }
+                        | DrawingItem::Arrow { color, .. }
+                        | DrawingItem::Line { color, .. }
+                        | DrawingItem::Rectangle { color, .. }
+                        | DrawingItem::Circle { color, .. } => Some(color.clone()),
+                        DrawingItem::Blur { .. } => None,
+                    };
+                    let w = match item {
+                        DrawingItem::Freehand { width, .. }
+                        | DrawingItem::Arrow { width, .. }
+                        | DrawingItem::Line { width, .. }
+                        | DrawingItem::Rectangle { width, .. }
+                        | DrawingItem::Circle { width, .. } => Some(*width),
+                        DrawingItem::Blur { .. } => None,
+                    };
+                    set_selected_item_info.set(Some((bx, by, bw, bh, c, w)));
+                    return;
+                }
+            }
+            set_selected_item_info.set(None);
+        })
+    };
+
+    Effect::new({
+        let update_info = update_selected_info.clone();
+        move |_| {
+            let _ = selected_item_index.get();
+            update_info();
+        }
+    });
+
+    Effect::new({
+        let session = session.clone();
+        let redraw = redraw_canvas.clone();
+        move |_| {
+            if active_tool.get() != Tool::Select {
+                if selected_item_index.get_untracked().is_some() {
+                    set_selected_item_index.set(None);
+                    set_selected_item_info.set(None);
+                    redraw();
+                }
+                session.borrow_mut().hovered_item_index = None;
+                set_is_hovering_shape.set(false);
+            }
+        }
+    });
+
+    Effect::new({
+        let items = items.clone();
+        let history = history.clone();
+        let future = future.clone();
+        let redraw = redraw_canvas.clone();
+        let update_info = update_selected_info.clone();
+        move |_| {
+            if let Some(new_c) = trigger_change_color.get() {
+                if let Some(idx) = selected_item_index.get_untracked() {
+                    let mut itms = items.borrow_mut();
+                    if idx < itms.len() {
+                        let prev = itms[idx].clone();
+                        set_item_color(&mut itms[idx], new_c);
+                        let new_item = itms[idx].clone();
+                        drop(itms);
+                        history.borrow_mut().push(HistoryAction::Modify { index: idx, prev, new: new_item });
+                        future.borrow_mut().clear();
+                        update_info();
+                        redraw();
+                    }
+                }
+            }
+        }
+    });
+
+    Effect::new({
+        let items = items.clone();
+        let history = history.clone();
+        let future = future.clone();
+        let redraw = redraw_canvas.clone();
+        let update_info = update_selected_info.clone();
+        move |_| {
+            if trigger_cycle_width.get() > 0 {
+                if let Some(idx) = selected_item_index.get_untracked() {
+                    let mut itms = items.borrow_mut();
+                    if idx < itms.len() {
+                        let prev = itms[idx].clone();
+                        let cur_w = match &prev {
+                            DrawingItem::Freehand { width, .. }
+                            | DrawingItem::Arrow { width, .. }
+                            | DrawingItem::Line { width, .. }
+                            | DrawingItem::Rectangle { width, .. }
+                            | DrawingItem::Circle { width, .. } => *width,
+                            _ => 4.0,
+                        };
+                        let next_w = if cur_w < 3.0 { 4.0 } else if cur_w < 6.0 { 8.0 } else { 2.0 };
+                        set_item_width(&mut itms[idx], next_w);
+                        let new_item = itms[idx].clone();
+                        drop(itms);
+                        history.borrow_mut().push(HistoryAction::Modify { index: idx, prev, new: new_item });
+                        future.borrow_mut().clear();
+                        update_info();
+                        redraw();
+                    }
+                }
+            }
+        }
+    });
+
+    Effect::new({
+        let items = items.clone();
+        let history = history.clone();
+        let future = future.clone();
+        let redraw = redraw_canvas.clone();
+        let update_info = update_selected_info.clone();
+        move |_| {
+            if trigger_duplicate.get() > 0 {
+                if let Some(idx) = selected_item_index.get_untracked() {
+                    let mut itms = items.borrow_mut();
+                    if idx < itms.len() {
+                        let mut cloned = itms[idx].clone();
+                        cloned.translate(16.0, 16.0);
+                        itms.push(cloned.clone());
+                        let new_idx = itms.len() - 1;
+                        drop(itms);
+                        history.borrow_mut().push(HistoryAction::Add(cloned));
+                        future.borrow_mut().clear();
+                        set_selected_item_index.set(Some(new_idx));
+                        set_selection_gen.update(|g| *g = g.wrapping_add(1));
+                        update_info();
+                        redraw();
+                    }
+                }
+            }
+        }
+    });
+
+    Effect::new({
+        let items = items.clone();
+        let history = history.clone();
+        let future = future.clone();
+        let redraw = redraw_canvas.clone();
+        move |_| {
+            if trigger_delete.get() > 0 {
+                if let Some(idx) = selected_item_index.get_untracked() {
+                    let mut itms = items.borrow_mut();
+                    if idx < itms.len() {
+                        let removed = itms.remove(idx);
+                        drop(itms);
+                        history.borrow_mut().push(HistoryAction::Delete { index: idx, item: removed });
+                        future.borrow_mut().clear();
+                        set_selected_item_index.set(None);
+                        set_selected_item_info.set(None);
+                        set_can_undo.set(true);
+                        set_can_redo.set(false);
+                        set_can_clear.set(!items.borrow().is_empty());
+                        redraw();
+                    }
+                }
+            }
+        }
+    });
+
     let switch_image = {
+        let bg_canvas_ref = bg_canvas_ref.clone();
         let canvas_ref = canvas_ref.clone();
         let base_image = base_image.clone();
+        let redraw_bg = redraw_bg.clone();
         let redraw_canvas = redraw_canvas.clone();
         Rc::new(move |img_src: String, w: u32, h: u32| {
             let img = HtmlImageElement::new().unwrap();
             let img_clone = img.clone();
             let base_image_clone = base_image.clone();
+            let redraw_bg = redraw_bg.clone();
             let redraw = redraw_canvas.clone();
+            let bg_canvas_ref_clone = bg_canvas_ref.clone();
             let canvas_ref_clone = canvas_ref.clone();
 
             let onload = Closure::<dyn FnMut()>::wrap(Box::new(move || {
+                if let Some(canvas) = bg_canvas_ref_clone.get() {
+                    canvas.set_width(w);
+                    canvas.set_height(h);
+                }
                 if let Some(canvas) = canvas_ref_clone.get() {
                     canvas.set_width(w);
                     canvas.set_height(h);
@@ -655,6 +555,7 @@ pub fn App() -> impl IntoView {
                 set_image_dimensions.set((w as f64, h as f64));
                 *base_image_clone.borrow_mut() = Some(img_clone.clone());
                 set_dimension_text.set(calculate_aspect_ratio_str(w as f64, h as f64));
+                redraw_bg();
                 redraw();
 
                 leptos::task::spawn_local(async move {
@@ -756,7 +657,7 @@ pub fn App() -> impl IntoView {
             let gallery_items = gallery_items.clone();
             set_is_gallery_loading.set(true);
             leptos::task::spawn_local(async move {
-                let args = serde_wasm_bindgen::to_value(&GetGalleryArgs { offset, limit: 5 }).unwrap_or(JsValue::NULL);
+                let args = serde_wasm_bindgen::to_value(&GetGalleryArgs { offset, limit: 10 }).unwrap_or(JsValue::NULL);
                 if let Ok(val) = call_tauri("get_gallery_items", args).await {
                     if let Ok(res) = serde_wasm_bindgen::from_value::<GalleryResponse>(val) {
                         set_gallery_total.set(res.total);
@@ -778,13 +679,9 @@ pub fn App() -> impl IntoView {
     let open_gallery = {
         let fetch_gallery = fetch_gallery.clone();
         let set_show_gallery = set_show_gallery.clone();
-        let gallery_items = gallery_items.clone();
         Arc::new(move || {
-            let is_empty = gallery_items.get_untracked().is_empty();
             set_show_gallery.set(true);
-            if is_empty {
-                fetch_gallery(0, false);
-            }
+            fetch_gallery(0, false);
         })
     };
 
@@ -890,8 +787,23 @@ pub fn App() -> impl IntoView {
         }
     });
 
-    let trigger_ocr_action = {
+    let get_composite_data_url = {
+        let bg_canvas_ref = bg_canvas_ref.clone();
         let canvas_ref = canvas_ref.clone();
+        let items = items.clone();
+        Rc::new(move || -> Option<String> {
+            let bg_c = bg_canvas_ref.get()?;
+            let draw_c = canvas_ref.get()?;
+            if items.borrow().is_empty() {
+                bg_c.to_data_url().ok()
+            } else {
+                compose_canvases(&bg_c, &draw_c)
+            }
+        })
+    };
+
+    let trigger_ocr_action = {
+        let get_data = get_composite_data_url.clone();
         let history = history.clone();
         let set_selected_ocr_indices = set_selected_ocr_indices.clone();
         Rc::new(move || {
@@ -907,15 +819,12 @@ pub fn App() -> impl IntoView {
             set_selected_ocr_indices.set(BTreeSet::new());
 
             let has_drawings = !history.borrow().is_empty();
-            let canvas_ref = canvas_ref.clone();
+            let get_data = get_data.clone();
 
             leptos::task::spawn_local(async move {
                 let args = if has_drawings {
                     sleep_ms(16).await;
-                    let data_url = canvas_ref
-                        .get()
-                        .and_then(|c| c.to_data_url().ok())
-                        .unwrap_or_default();
+                    let data_url = get_data().unwrap_or_default();
                     serde_wasm_bindgen::to_value(&OcrArgs {
                         data_base64: data_url,
                     })
@@ -959,9 +868,12 @@ pub fn App() -> impl IntoView {
         let future = future.clone();
         let redraw = redraw_canvas.clone();
         let switch_img = switch_image.clone();
+        let update_info = update_selected_info.clone();
         Rc::new(move || {
             let mut hist = history.borrow_mut();
             if let Some(action) = hist.pop() {
+                set_selected_item_index.set(None);
+                set_selected_item_info.set(None);
                 match action {
                     HistoryAction::Add(item) => {
                         items.borrow_mut().pop();
@@ -996,7 +908,31 @@ pub fn App() -> impl IntoView {
                             new_height,
                         });
                     }
+                    HistoryAction::Move { index, prev, new } => {
+                        let mut itms = items.borrow_mut();
+                        if index < itms.len() {
+                            itms[index] = prev.clone();
+                        }
+                        future.borrow_mut().push(HistoryAction::Move { index, prev, new });
+                        redraw();
+                    }
+                    HistoryAction::Delete { index, item } => {
+                        let mut itms = items.borrow_mut();
+                        let idx = index.min(itms.len());
+                        itms.insert(idx, item.clone());
+                        future.borrow_mut().push(HistoryAction::Delete { index, item });
+                        redraw();
+                    }
+                    HistoryAction::Modify { index, prev, new } => {
+                        let mut itms = items.borrow_mut();
+                        if index < itms.len() {
+                            itms[index] = prev.clone();
+                        }
+                        future.borrow_mut().push(HistoryAction::Modify { index, prev, new });
+                        redraw();
+                    }
                 }
+                update_info();
                 set_can_undo.set(!hist.is_empty());
                 drop(hist);
                 set_can_redo.set(!future.borrow().is_empty());
@@ -1018,9 +954,12 @@ pub fn App() -> impl IntoView {
         let future = future.clone();
         let redraw = redraw_canvas.clone();
         let switch_img = switch_image.clone();
+        let update_info = update_selected_info.clone();
         Rc::new(move || {
             let mut fut = future.borrow_mut();
             if let Some(action) = fut.pop() {
+                set_selected_item_index.set(None);
+                set_selected_item_info.set(None);
                 match action {
                     HistoryAction::Add(item) => {
                         items.borrow_mut().push(item.clone());
@@ -1055,7 +994,32 @@ pub fn App() -> impl IntoView {
                             new_height,
                         });
                     }
+                    HistoryAction::Move { index, prev, new } => {
+                        let mut itms = items.borrow_mut();
+                        if index < itms.len() {
+                            itms[index] = new.clone();
+                        }
+                        history.borrow_mut().push(HistoryAction::Move { index, prev, new });
+                        redraw();
+                    }
+                    HistoryAction::Delete { index, item } => {
+                        let mut itms = items.borrow_mut();
+                        if index < itms.len() {
+                            itms.remove(index);
+                        }
+                        history.borrow_mut().push(HistoryAction::Delete { index, item });
+                        redraw();
+                    }
+                    HistoryAction::Modify { index, prev, new } => {
+                        let mut itms = items.borrow_mut();
+                        if index < itms.len() {
+                            itms[index] = new.clone();
+                        }
+                        history.borrow_mut().push(HistoryAction::Modify { index, prev, new });
+                        redraw();
+                    }
                 }
+                update_info();
                 set_can_redo.set(!fut.is_empty());
                 drop(fut);
                 set_can_undo.set(!history.borrow().is_empty());
@@ -1097,11 +1061,11 @@ pub fn App() -> impl IntoView {
         }
     };
 
+
     let on_copy_action = {
-        let canvas_ref = canvas_ref.clone();
+        let get_data = get_composite_data_url.clone();
         Rc::new(move || {
-            if let Some(canvas) = canvas_ref.get() {
-                let data_url = canvas.to_data_url().unwrap_or_default();
+            if let Some(data_url) = get_data() {
                 set_status_text.set("Copiando...".to_string());
                 leptos::task::spawn_local(async move {
                     let args = serde_wasm_bindgen::to_value(&CopyArgs {
@@ -1139,10 +1103,11 @@ pub fn App() -> impl IntoView {
     };
 
     let on_save_action = {
-        let canvas_ref = canvas_ref.clone();
+        let get_data = get_composite_data_url.clone();
+        let fetch_gallery = fetch_gallery.clone();
         Rc::new(move || {
-            if let Some(canvas) = canvas_ref.get() {
-                let data_url = canvas.to_data_url().unwrap_or_default();
+            if let Some(data_url) = get_data() {
+                let fetch_gal = fetch_gallery.clone();
                 set_status_text.set("Guardando...".to_string());
                 leptos::task::spawn_local(async move {
                     let args = serde_wasm_bindgen::to_value(&SaveArgs {
@@ -1166,6 +1131,7 @@ pub fn App() -> impl IntoView {
                             } else {
                                 notify("Guardado con éxito".to_string());
                             }
+                            fetch_gal(0, false);
                         }
                         Err(e) => {
                             let msg = e.as_string().unwrap_or_else(|| "Error al guardar".to_string());
@@ -1200,7 +1166,6 @@ pub fn App() -> impl IntoView {
     let _ = window_event_listener(ev::contextmenu, |e: MouseEvent| {
         e.prevent_default();
     });
-
     Effect::new({
         let fetch_gallery = fetch_gallery.clone();
         move |_| {
@@ -1219,13 +1184,27 @@ pub fn App() -> impl IntoView {
         let copy_selected_ocr = copy_selected_ocr.clone();
         let set_selected_ocr_indices = set_selected_ocr_indices.clone();
         let open_gallery_fn = open_gallery.clone();
+        let items = items.clone();
+        let history = history.clone();
+        let future = future.clone();
+        let redraw = redraw_canvas.clone();
+        let session = session.clone();
+        let trigger_forced_open = trigger_forced_open.clone();
         move |e: KeyboardEvent| {
             let key = e.key();
             let ctrl = e.ctrl_key() || e.meta_key();
+            let code = e.code();
             let shift = e.shift_key();
             let alt = e.alt_key();
 
-            if ctrl && (key == "a" || key == "A") && is_ocr_active.get_untracked() {
+            let is_z = key.eq_ignore_ascii_case("z") || code == "KeyZ";
+            let is_y = key.eq_ignore_ascii_case("y") || code == "KeyY";
+            let is_a = key.eq_ignore_ascii_case("a") || code == "KeyA";
+            let is_c = key.eq_ignore_ascii_case("c") || code == "KeyC";
+            let is_d = key.eq_ignore_ascii_case("d") || code == "KeyD";
+            let is_s = key.eq_ignore_ascii_case("s") || code == "KeyS";
+
+            if ctrl && is_a && is_ocr_active.get_untracked() {
                 e.prevent_default();
                 let len = ocr_blocks.get_untracked().len();
                 set_selected_ocr_indices.set((0..len).collect());
@@ -1236,22 +1215,60 @@ pub fn App() -> impl IntoView {
                 } else {
                     copy_all_ocr();
                 }
-            } else if ctrl && (key == "z" || key == "Z") && !shift {
+            } else if ctrl && is_z && !shift {
                 e.prevent_default();
                 undo();
-            } else if (ctrl && (key == "y" || key == "Y")) || (ctrl && shift && (key == "z" || key == "Z")) {
+            } else if (ctrl && is_y) || (ctrl && shift && is_z) {
                 e.prevent_default();
                 redo();
-            } else if ctrl && (key == "c" || key == "C") {
+            } else if ctrl && is_c {
                 e.prevent_default();
                 copy();
-            } else if ctrl && (key == "s" || key == "S") {
+            } else if ctrl && is_d && !is_ocr_active.get_untracked() {
+                e.prevent_default();
+                if let Some(idx) = selected_item_index.get_untracked() {
+                    let mut itms = items.borrow_mut();
+                    if idx < itms.len() {
+                        let mut cloned = itms[idx].clone();
+                        cloned.translate(16.0, 16.0);
+                        itms.push(cloned.clone());
+                        let new_idx = itms.len() - 1;
+                        drop(itms);
+                        history.borrow_mut().push(HistoryAction::Add(cloned));
+                        future.borrow_mut().clear();
+                        set_selected_item_index.set(Some(new_idx));
+                        set_selection_gen.update(|g| *g = g.wrapping_add(1));
+                        set_can_undo.set(true);
+                        set_can_redo.set(false);
+                        redraw();
+                    }
+                }
+            } else if ctrl && is_s {
                 e.prevent_default();
                 save();
-            } else if ctrl && (key == "0") {
+            } else if ctrl && key == "0" {
                 e.prevent_default();
                 set_zoom_level.set(1.0);
                 set_pan_offset.set((0.0, 0.0));
+            } else if (key == "Delete" || key == "Backspace") && !is_ocr_active.get_untracked() {
+                let target_idx = selected_item_index.get_untracked().or(session.borrow().hovered_item_index);
+                if let Some(idx) = target_idx {
+                    let mut itms = items.borrow_mut();
+                    if idx < itms.len() {
+                        let removed = itms.remove(idx);
+                        drop(itms);
+                        history.borrow_mut().push(HistoryAction::Delete { index: idx, item: removed });
+                        future.borrow_mut().clear();
+                        set_selected_item_index.set(None);
+                        set_selected_item_info.set(None);
+                        session.borrow_mut().hovered_item_index = None;
+                        set_is_hovering_shape.set(false);
+                        set_can_undo.set(true);
+                        set_can_redo.set(false);
+                        set_can_clear.set(!items.borrow().is_empty());
+                        redraw();
+                    }
+                }
             } else if key == "Tab" {
                 e.prevent_default();
                 if show_gallery.get_untracked() {
@@ -1263,6 +1280,10 @@ pub fn App() -> impl IntoView {
                 e.prevent_default();
                 if show_gallery.get_untracked() {
                     close_gallery();
+                } else if selected_item_index.get_untracked().is_some() {
+                    set_selected_item_index.set(None);
+                    set_selected_item_info.set(None);
+                    redraw();
                 } else if !selected_ocr_indices.get_untracked().is_empty() {
                     set_selected_ocr_indices.set(BTreeSet::new());
                 } else if is_ocr_active.get_untracked() {
@@ -1276,65 +1297,114 @@ pub fn App() -> impl IntoView {
                     close();
                 }
             } else if !ctrl && !alt {
-                match key.as_str() {
-                    "p" | "P" => {
-                        set_picker_preview.set(None);
-                        set_is_ocr_active.set(false);
-                        set_active_tool.set(Tool::Pen);
-                    }
-                    "h" | "H" => {
-                        set_picker_preview.set(None);
-                        set_is_ocr_active.set(false);
-                        set_active_tool.set(Tool::Highlighter);
-                    }
-                    "a" | "A" => {
-                        set_picker_preview.set(None);
-                        set_is_ocr_active.set(false);
-                        set_active_tool.set(Tool::Arrow);
-                    }
-                    "r" | "R" => {
-                        set_picker_preview.set(None);
-                        set_is_ocr_active.set(false);
-                        set_active_tool.set(Tool::Rectangle);
-                    }
-                    "c" | "C" => {
-                        set_picker_preview.set(None);
-                        set_is_ocr_active.set(false);
-                        set_active_tool.set(Tool::Circle);
-                    }
-                    "b" | "B" => {
-                        set_picker_preview.set(None);
-                        set_is_ocr_active.set(false);
-                        set_active_tool.set(Tool::Blur);
-                    }
-                    "i" | "I" => {
-                        set_is_ocr_active.set(false);
-                        set_active_tool.set(Tool::Picker);
-                    }
-                    "o" | "O" => {
-                        trigger_ocr();
-                    }
-                    "[" => {
-                        let cur = stroke_width.get_untracked();
-                        if let Some(pos) = WIDTHS.iter().position(|&(w, _)| (w - cur).abs() < 0.1) {
-                            if pos > 0 {
-                                let new_w = WIDTHS[pos - 1].0;
-                                set_stroke_width.set(new_w);
-                                notify(format!("Grosor: {}px", new_w));
+                let lower_key = key.to_ascii_lowercase();
+                let is_1 = lower_key == "1" || code == "Digit1" || code == "Numpad1";
+                let is_2 = lower_key == "2" || code == "Digit2" || code == "Numpad2";
+                let is_3 = lower_key == "3" || code == "Digit3" || code == "Numpad3";
+
+                if is_1 {
+                    set_picker_preview.set(None);
+                    set_is_ocr_active.set(false);
+                    set_active_tool.set(Tool::Select);
+                    set_forced_open_group.set(None);
+                } else if is_2 {
+                    set_picker_preview.set(None);
+                    set_is_ocr_active.set(false);
+                    let cur = active_tool.get_untracked();
+                    let next = match cur {
+                        Tool::Pen => Tool::Highlighter,
+                        Tool::Highlighter => Tool::Pen,
+                        _ => selected_freehand_slot.get_untracked(),
+                    };
+                    set_selected_freehand_slot.set(next);
+                    set_active_tool.set(next);
+                    trigger_forced_open(2);
+                } else if is_3 {
+                    set_picker_preview.set(None);
+                    set_is_ocr_active.set(false);
+                    let shapes = [Tool::Rectangle, Tool::Arrow, Tool::Line, Tool::Circle];
+                    let cur = active_tool.get_untracked();
+                    let next = if let Some(pos) = shapes.iter().position(|&s| s == cur) {
+                        shapes[(pos + 1) % shapes.len()]
+                    } else {
+                        selected_shape_slot.get_untracked()
+                    };
+                    set_selected_shape_slot.set(next);
+                    set_active_tool.set(next);
+                    trigger_forced_open(3);
+                } else {
+                    match lower_key.as_str() {
+                        "v" => {
+                            set_picker_preview.set(None);
+                            set_is_ocr_active.set(false);
+                            set_active_tool.set(Tool::Select);
+                        }
+                        "p" => {
+                            set_picker_preview.set(None);
+                            set_is_ocr_active.set(false);
+                            set_selected_freehand_slot.set(Tool::Pen);
+                            set_active_tool.set(Tool::Pen);
+                        }
+                        "h" => {
+                            set_picker_preview.set(None);
+                            set_is_ocr_active.set(false);
+                            set_selected_freehand_slot.set(Tool::Highlighter);
+                            set_active_tool.set(Tool::Highlighter);
+                        }
+                        "a" => {
+                            set_picker_preview.set(None);
+                            set_is_ocr_active.set(false);
+                            set_selected_shape_slot.set(Tool::Arrow);
+                            set_active_tool.set(Tool::Arrow);
+                        }
+                        "l" => {
+                            set_picker_preview.set(None);
+                            set_is_ocr_active.set(false);
+                            set_selected_shape_slot.set(Tool::Line);
+                            set_active_tool.set(Tool::Line);
+                        }
+                        "r" => {
+                            set_picker_preview.set(None);
+                            set_is_ocr_active.set(false);
+                            set_selected_shape_slot.set(Tool::Rectangle);
+                            set_active_tool.set(Tool::Rectangle);
+                        }
+                        "c" => {
+                            set_picker_preview.set(None);
+                            set_is_ocr_active.set(false);
+                            set_selected_shape_slot.set(Tool::Circle);
+                            set_active_tool.set(Tool::Circle);
+                        }
+                        "b" => {
+                            set_picker_preview.set(None);
+                            set_is_ocr_active.set(false);
+                            set_active_tool.set(Tool::Blur);
+                        }
+                        "i" => {
+                            set_is_ocr_active.set(false);
+                            set_active_tool.set(Tool::Picker);
+                        }
+                        "o" => {
+                            trigger_ocr();
+                        }
+                        "[" => {
+                            let cur = stroke_width.get_untracked();
+                            if let Some(pos) = WIDTHS.iter().position(|&(w, _)| (w - cur).abs() < 0.1) {
+                                if pos > 0 {
+                                    set_stroke_width.set(WIDTHS[pos - 1].0);
+                                }
                             }
                         }
-                    }
-                    "]" => {
-                        let cur = stroke_width.get_untracked();
-                        if let Some(pos) = WIDTHS.iter().position(|&(w, _)| (w - cur).abs() < 0.1) {
-                            if pos + 1 < WIDTHS.len() {
-                                let new_w = WIDTHS[pos + 1].0;
-                                set_stroke_width.set(new_w);
-                                notify(format!("Grosor: {}px", new_w));
+                        "]" => {
+                            let cur = stroke_width.get_untracked();
+                            if let Some(pos) = WIDTHS.iter().position(|&(w, _)| (w - cur).abs() < 0.1) {
+                                if pos + 1 < WIDTHS.len() {
+                                    set_stroke_width.set(WIDTHS[pos + 1].0);
+                                }
                             }
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
         }
@@ -1378,26 +1448,27 @@ pub fn App() -> impl IntoView {
     };
 
     let on_mouse_down = {
-        let is_drawing = is_drawing.clone();
-        let is_panning = is_panning.clone();
-        let pan_start_mouse = pan_start_mouse.clone();
-        let pan_initial = pan_initial.clone();
-        let start_point = start_point.clone();
-        let current_points = current_points.clone();
+        let session = session.clone();
+        let bg_canvas_ref = bg_canvas_ref.clone();
         let canvas_ref = canvas_ref.clone();
         let copy_txt = copy_text_direct.clone();
+        let items = items.clone();
+        let redraw = redraw_canvas.clone();
         move |ev: MouseEvent| {
             if ev.button() == 1 {
-                *is_panning.borrow_mut() = true;
+                let mut sess = session.borrow_mut();
+                sess.is_panning = true;
+                sess.pan_start_mouse = (ev.client_x() as f64, ev.client_y() as f64);
+                sess.pan_initial = pan_offset.get_untracked();
                 set_is_panning_ui.set(true);
-                *pan_start_mouse.borrow_mut() = (ev.client_x() as f64, ev.client_y() as f64);
-                *pan_initial.borrow_mut() = pan_offset.get_untracked();
                 return;
             }
 
             if ev.button() != 0 {
                 return;
             }
+
+            set_forced_open_group.set(None);
 
             let canvas = match canvas_ref.get() {
                 Some(c) => c,
@@ -1411,7 +1482,8 @@ pub fn App() -> impl IntoView {
 
             let tool = active_tool.get_untracked();
             if tool == Tool::Picker {
-                if let Some(ctx) = canvas
+                let sample_canvas = bg_canvas_ref.get().unwrap_or_else(|| canvas.clone());
+                if let Some(ctx) = sample_canvas
                     .get_context("2d")
                     .ok()
                     .flatten()
@@ -1429,28 +1501,50 @@ pub fn App() -> impl IntoView {
                 return;
             }
 
-            *is_drawing.borrow_mut() = true;
-            *start_point.borrow_mut() = Some(Point { x, y });
-            current_points.borrow_mut().clear();
-            current_points.borrow_mut().push(Point { x, y });
+            if tool == Tool::Select {
+                let hovered = session.borrow().hovered_item_index;
+                if let Some(idx) = hovered {
+                    set_selected_item_index.set(Some(idx));
+                    set_selection_gen.update(|g| *g = g.wrapping_add(1));
+                    let itms = items.borrow();
+                    if idx < itms.len() {
+                        let initial = itms[idx].clone();
+                        drop(itms);
+                        session.borrow_mut().drag_item_state = Some((idx, initial, Point { x, y }, 0.0));
+                        set_is_dragging_shape.set(true);
+                    }
+                    redraw();
+                } else {
+                    set_selected_item_index.set(None);
+                    set_selected_item_info.set(None);
+                    redraw();
+                }
+                return;
+            }
+
+            set_selected_item_index.set(None);
+            set_selected_item_info.set(None);
+            redraw();
+            let mut sess = session.borrow_mut();
+            sess.is_drawing = true;
+            sess.start_point = Some(Point { x, y });
+            sess.current_points.clear();
+            sess.current_points.push(Point { x, y });
         }
     };
 
     let on_mouse_move = {
-        let is_drawing = is_drawing.clone();
-        let is_panning = is_panning.clone();
-        let pan_start_mouse = pan_start_mouse.clone();
-        let pan_initial = pan_initial.clone();
-        let start_point = start_point.clone();
-        let current_points = current_points.clone();
+        let session = session.clone();
+        let bg_canvas_ref = bg_canvas_ref.clone();
         let canvas_ref = canvas_ref.clone();
         let loupe_canvas_ref = loupe_canvas_ref.clone();
         let redraw = redraw_canvas.clone();
         let base_image = base_image.clone();
+        let items = items.clone();
         move |ev: MouseEvent| {
-            if *is_panning.borrow() {
-                let (sx, sy) = *pan_start_mouse.borrow();
-                let (ix, iy) = *pan_initial.borrow();
+            if session.borrow().is_panning {
+                let (sx, sy) = session.borrow().pan_start_mouse;
+                let (ix, iy) = session.borrow().pan_initial;
                 let dx = ev.client_x() as f64 - sx;
                 let dy = ev.client_y() as f64 - sy;
                 set_pan_offset.set((ix + dx, iy + dy));
@@ -1470,32 +1564,59 @@ pub fn App() -> impl IntoView {
             let tool = active_tool.get_untracked();
 
             if tool == Tool::Picker {
-                if let Some(ctx) = canvas
+                let bg_canvas = bg_canvas_ref.get().unwrap_or_else(|| canvas.clone());
+                let sample_ctx = bg_canvas
                     .get_context("2d")
                     .ok()
                     .flatten()
-                    .and_then(|c| c.dyn_into::<CanvasRenderingContext2d>().ok())
-                {
+                    .and_then(|c| c.dyn_into::<CanvasRenderingContext2d>().ok());
+
+                if let Some(ctx) = sample_ctx {
                     if let Ok(img_data) = ctx.get_image_data(x, y, 1.0, 1.0) {
-                        let d = img_data.data();
+                        let mut d = img_data.data();
+                        if let Some(draw_ctx) = canvas
+                            .get_context("2d")
+                            .ok()
+                            .flatten()
+                            .and_then(|c| c.dyn_into::<CanvasRenderingContext2d>().ok())
+                        {
+                            if let Ok(draw_img_data) = draw_ctx.get_image_data(x, y, 1.0, 1.0) {
+                                let dd = draw_img_data.data();
+                                if dd[3] > 0 {
+                                    d = dd;
+                                }
+                            }
+                        }
                         let picked_hex = format!("#{:02x}{:02x}{:02x}", d[0], d[1], d[2]);
                         set_picker_preview.set(Some((ev.client_x() as f64, ev.client_y() as f64, picked_hex)));
 
                         if let Some(l_canvas) = loupe_canvas_ref.get() {
+                            let dpr = web_sys::window().map(|w| w.device_pixel_ratio()).unwrap_or(1.0).max(1.0);
+                            let target_px = (80.0 * dpr).round() as u32;
+                            if l_canvas.width() != target_px || l_canvas.height() != target_px {
+                                l_canvas.set_width(target_px);
+                                l_canvas.set_height(target_px);
+                            }
                             if let Some(l_ctx) = l_canvas.get_context("2d").ok().flatten().and_then(|c| c.dyn_into::<CanvasRenderingContext2d>().ok()) {
                                 let patch_size = 9.0;
                                 let half = patch_size / 2.0;
                                 let src_x = (x - half).max(0.0);
                                 let src_y = (y - half).max(0.0);
 
+                                l_ctx.save();
+                                let _ = l_ctx.scale(dpr, dpr);
                                 l_ctx.set_image_smoothing_enabled(false);
+                                let _ = l_ctx.draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
+                                    &bg_canvas,
+                                    src_x, src_y, patch_size, patch_size,
+                                    0.0, 0.0, 80.0, 80.0,
+                                );
                                 let _ = l_ctx.draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
                                     &canvas,
                                     src_x, src_y, patch_size, patch_size,
                                     0.0, 0.0, 80.0, 80.0,
                                 );
 
-                                l_ctx.save();
                                 l_ctx.set_stroke_style_str("rgba(255, 255, 255, 0.2)");
                                 l_ctx.set_line_width(0.5);
                                 let cell = 80.0 / patch_size;
@@ -1523,7 +1644,39 @@ pub fn App() -> impl IntoView {
                 return;
             }
 
-            if !*is_drawing.borrow() {
+            let mut sess = session.borrow_mut();
+            if let Some((idx, _, ref mut last_pt, ref mut total_dist)) = sess.drag_item_state {
+                let dx = x - last_pt.x;
+                let dy = y - last_pt.y;
+                *total_dist += dx.hypot(dy);
+                last_pt.x = x;
+                last_pt.y = y;
+                drop(sess);
+                let mut itms = items.borrow_mut();
+                if idx < itms.len() {
+                    itms[idx].translate(dx, dy);
+                }
+                drop(itms);
+                redraw();
+                return;
+            }
+
+            if !sess.is_drawing {
+                if tool == Tool::Select && !is_cropping_active.get_untracked() {
+                    let pt = Point { x, y };
+                    let hovered = items.borrow().iter().enumerate().rev().find_map(|(idx, itm)| {
+                        if hit_test_item(itm, &pt) {
+                            Some(idx)
+                        } else {
+                            None
+                        }
+                    });
+                    sess.hovered_item_index = hovered;
+                    set_is_hovering_shape.set(hovered.is_some());
+                } else {
+                    sess.hovered_item_index = None;
+                    set_is_hovering_shape.set(false);
+                }
                 return;
             }
 
@@ -1532,9 +1685,16 @@ pub fn App() -> impl IntoView {
 
             match tool {
                 Tool::Pen | Tool::Highlighter => {
-                    let prev_pt = current_points.borrow().last().cloned();
-                    current_points.borrow_mut().push(Point { x, y });
-                    if let Some(prev) = prev_pt {
+                    let should_push = match sess.current_points.last() {
+                        Some(last_pt) => (x - last_pt.x).hypot(y - last_pt.y) >= 2.0,
+                        None => true,
+                    };
+                    if should_push {
+                        sess.current_points.push(Point { x, y });
+                    }
+                    let pts = sess.current_points.clone();
+                    drop(sess);
+                    if pts.len() >= 3 {
                         if let Some(ctx) = canvas
                             .get_context("2d")
                             .ok()
@@ -1550,18 +1710,52 @@ pub fn App() -> impl IntoView {
                             ctx.set_line_width(width);
                             ctx.set_line_cap("round");
                             ctx.set_line_join("round");
-                            ctx.move_to(prev.x, prev.y);
-                            ctx.line_to(x, y);
+                            let p0 = &pts[pts.len() - 3];
+                            let p1 = &pts[pts.len() - 2];
+                            let p2 = &pts[pts.len() - 1];
+                            let mid1_x = (p0.x + p1.x) / 2.0;
+                            let mid1_y = (p0.y + p1.y) / 2.0;
+                            let mid2_x = (p1.x + p2.x) / 2.0;
+                            let mid2_y = (p1.y + p2.y) / 2.0;
+                            ctx.move_to(mid1_x, mid1_y);
+                            ctx.quadratic_curve_to(p1.x, p1.y, mid2_x, mid2_y);
+                            ctx.stroke();
+                            ctx.restore();
+                        }
+                    } else if pts.len() == 2 {
+                        let p0 = &pts[0];
+                        let p1 = &pts[1];
+                        if let Some(ctx) = canvas
+                            .get_context("2d")
+                            .ok()
+                            .flatten()
+                            .and_then(|c| c.dyn_into::<CanvasRenderingContext2d>().ok())
+                        {
+                            ctx.save();
+                            if tool == Tool::Highlighter {
+                                ctx.set_global_alpha(0.35);
+                            }
+                            ctx.begin_path();
+                            ctx.set_stroke_style_str(&clr);
+                            ctx.set_line_width(width);
+                            ctx.set_line_cap("round");
+                            ctx.set_line_join("round");
+                            ctx.move_to(p0.x, p0.y);
+                            let mid_x = (p0.x + p1.x) / 2.0;
+                            let mid_y = (p0.y + p1.y) / 2.0;
+                            ctx.line_to(mid_x, mid_y);
                             ctx.stroke();
                             ctx.restore();
                         }
                     }
                 }
                 Tool::Blur => {
-                    current_points.borrow_mut().clear();
-                    current_points.borrow_mut().push(Point { x, y });
+                    sess.current_points.clear();
+                    sess.current_points.push(Point { x, y });
+                    let start_opt = sess.start_point;
+                    drop(sess);
                     redraw();
-                    if let Some(ref start) = *start_point.borrow() {
+                    if let Some(ref start) = start_opt {
                         if let Some(ctx) = canvas
                             .get_context("2d")
                             .ok()
@@ -1585,11 +1779,33 @@ pub fn App() -> impl IntoView {
                         }
                     }
                 }
-                Tool::Arrow | Tool::Rectangle | Tool::Circle => {
-                    current_points.borrow_mut().clear();
-                    current_points.borrow_mut().push(Point { x, y });
+                Tool::Arrow | Tool::Line | Tool::Rectangle | Tool::Circle => {
+                    let mut cur_x = x;
+                    let mut cur_y = y;
+                    if let Some(ref start) = sess.start_point {
+                        if ev.shift_key() {
+                            if tool == Tool::Arrow || tool == Tool::Line {
+                                let dx = x - start.x;
+                                let dy = y - start.y;
+                                let angle = dy.atan2(dx);
+                                let step = std::f64::consts::PI / 4.0;
+                                let snapped_angle = (angle / step).round() * step;
+                                let dist = dx.hypot(dy);
+                                cur_x = start.x + dist * snapped_angle.cos();
+                                cur_y = start.y + dist * snapped_angle.sin();
+                            } else if tool == Tool::Rectangle || tool == Tool::Circle {
+                                let side = (x - start.x).abs().max((y - start.y).abs());
+                                cur_x = if x >= start.x { start.x + side } else { start.x - side };
+                                cur_y = if y >= start.y { start.y + side } else { start.y - side };
+                            }
+                        }
+                    }
+                    sess.current_points.clear();
+                    sess.current_points.push(Point { x: cur_x, y: cur_y });
+                    let start_opt = sess.start_point;
+                    drop(sess);
                     redraw();
-                    if let Some(ref start) = *start_point.borrow() {
+                    if let Some(ref start) = start_opt {
                         if let Some(ctx) = canvas
                             .get_context("2d")
                             .ok()
@@ -1604,22 +1820,35 @@ pub fn App() -> impl IntoView {
                             ctx.set_line_join("round");
 
                             if tool == Tool::Arrow {
+                                draw_arrow(&ctx, start, &Point { x: cur_x, y: cur_y }, width);
+                            } else if tool == Tool::Line {
                                 ctx.begin_path();
                                 ctx.move_to(start.x, start.y);
-                                ctx.line_to(x, y);
+                                ctx.line_to(cur_x, cur_y);
                                 ctx.stroke();
-                                draw_arrow_head(&ctx, start, &Point { x, y }, width);
                             } else if tool == Tool::Rectangle {
-                                let rx = start.x.min(x);
-                                let ry = start.y.min(y);
-                                let rw = (start.x - x).abs();
-                                let rh = (start.y - y).abs();
-                                ctx.stroke_rect(rx, ry, rw, rh);
+                                let rx = start.x.min(cur_x);
+                                let ry = start.y.min(cur_y);
+                                let rw = (start.x - cur_x).abs();
+                                let rh = (start.y - cur_y).abs();
+                                let r = 8.0f64.min(rw / 2.0).min(rh / 2.0);
+                                ctx.begin_path();
+                                ctx.move_to(rx + r, ry);
+                                ctx.line_to(rx + rw - r, ry);
+                                ctx.quadratic_curve_to(rx + rw, ry, rx + rw, ry + r);
+                                ctx.line_to(rx + rw, ry + rh - r);
+                                ctx.quadratic_curve_to(rx + rw, ry + rh, rx + rw - r, ry + rh);
+                                ctx.line_to(rx + r, ry + rh);
+                                ctx.quadratic_curve_to(rx, ry + rh, rx, ry + rh - r);
+                                ctx.line_to(rx, ry + r);
+                                ctx.quadratic_curve_to(rx, ry, rx + r, ry);
+                                ctx.close_path();
+                                ctx.stroke();
                             } else {
-                                let cx = (start.x + x) / 2.0;
-                                let cy = (start.y + y) / 2.0;
-                                let rx = ((start.x - x).abs() / 2.0).max(0.1);
-                                let ry = ((start.y - y).abs() / 2.0).max(0.1);
+                                let cx = (start.x + cur_x) / 2.0;
+                                let cy = (start.y + cur_y) / 2.0;
+                                let rx = ((start.x - cur_x).abs() / 2.0).max(0.1);
+                                let ry = ((start.y - cur_y).abs() / 2.0).max(0.1);
                                 ctx.begin_path();
                                 let _ = ctx.ellipse(cx, cy, rx, ry, 0.0, 0.0, std::f64::consts::TAU);
                                 ctx.stroke();
@@ -1628,38 +1857,61 @@ pub fn App() -> impl IntoView {
                         }
                     }
                 }
-                Tool::Picker => {}
+                Tool::Select | Tool::Picker => {}
             }
         }
     };
 
     let on_mouse_up_action = {
-        let is_drawing = is_drawing.clone();
-        let is_panning = is_panning.clone();
-        let start_point = start_point.clone();
-        let current_points = current_points.clone();
+        let session = session.clone();
         let items = items.clone();
         let history = history.clone();
         let future = future.clone();
         let redraw = redraw_canvas.clone();
+        let update_info = update_selected_info.clone();
         Rc::new(move || {
-            *is_panning.borrow_mut() = false;
+            let mut sess = session.borrow_mut();
+            sess.is_panning = false;
             set_is_panning_ui.set(false);
 
-            if !*is_drawing.borrow() {
+            if let Some((idx, initial, _, total_dist)) = sess.drag_item_state.take() {
+                drop(sess);
+                set_is_dragging_shape.set(false);
+                if total_dist > 1.5 {
+                    let itms = items.borrow();
+                    if idx < itms.len() {
+                        let current = itms[idx].clone();
+                        history.borrow_mut().push(HistoryAction::Move {
+                            index: idx,
+                            prev: initial,
+                            new: current,
+                        });
+                        future.borrow_mut().clear();
+                        set_can_undo.set(true);
+                        set_can_redo.set(false);
+                    }
+                }
+                update_info();
+                set_selection_gen.update(|g| *g = g.wrapping_add(1));
+                redraw();
                 return;
             }
-            *is_drawing.borrow_mut() = false;
+
+            if !sess.is_drawing {
+                return;
+            }
+            sess.is_drawing = false;
             let tool = active_tool.get_untracked();
             let width = stroke_width.get_untracked();
             let clr = color.get_untracked();
 
             let new_item = match tool {
                 Tool::Pen | Tool::Highlighter => {
-                    let pts = current_points.borrow().clone();
+                    let pts = sess.current_points.clone();
                     if !pts.is_empty() {
+                        let simplified = simplify_points_rdp(&pts, 0.75);
                         Some(DrawingItem::Freehand {
-                            points: pts,
+                            points: simplified,
                             color: clr,
                             width,
                             is_highlighter: tool == Tool::Highlighter,
@@ -1669,7 +1921,7 @@ pub fn App() -> impl IntoView {
                     }
                 }
                 Tool::Blur => {
-                    if let (Some(start), Some(end)) = (start_point.borrow().clone(), current_points.borrow().last().cloned()) {
+                    if let (Some(start), Some(end)) = (sess.start_point, sess.current_points.last().copied()) {
                         if (start.x - end.x).abs() > 2.0 || (start.y - end.y).abs() > 2.0 {
                             Some(DrawingItem::Blur { start, end })
                         } else {
@@ -1680,7 +1932,7 @@ pub fn App() -> impl IntoView {
                     }
                 }
                 Tool::Arrow => {
-                    if let (Some(start), Some(end)) = (start_point.borrow().clone(), current_points.borrow().last().cloned()) {
+                    if let (Some(start), Some(end)) = (sess.start_point, sess.current_points.last().copied()) {
                         if (start.x - end.x).hypot(start.y - end.y) > 2.0 {
                             Some(DrawingItem::Arrow {
                                 start,
@@ -1695,8 +1947,24 @@ pub fn App() -> impl IntoView {
                         None
                     }
                 }
+                Tool::Line => {
+                    if let (Some(start), Some(end)) = (sess.start_point, sess.current_points.last().copied()) {
+                        if (start.x - end.x).hypot(start.y - end.y) > 2.0 {
+                            Some(DrawingItem::Line {
+                                start,
+                                end,
+                                color: clr,
+                                width,
+                            })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
                 Tool::Rectangle => {
-                    if let (Some(start), Some(end)) = (start_point.borrow().clone(), current_points.borrow().last().cloned()) {
+                    if let (Some(start), Some(end)) = (sess.start_point, sess.current_points.last().copied()) {
                         if (start.x - end.x).abs() > 2.0 || (start.y - end.y).abs() > 2.0 {
                             Some(DrawingItem::Rectangle {
                                 start,
@@ -1712,7 +1980,7 @@ pub fn App() -> impl IntoView {
                     }
                 }
                 Tool::Circle => {
-                    if let (Some(start), Some(end)) = (start_point.borrow().clone(), current_points.borrow().last().cloned()) {
+                    if let (Some(start), Some(end)) = (sess.start_point, sess.current_points.last().copied()) {
                         if (start.x - end.x).abs() > 2.0 || (start.y - end.y).abs() > 2.0 {
                             Some(DrawingItem::Circle {
                                 start,
@@ -1727,17 +1995,24 @@ pub fn App() -> impl IntoView {
                         None
                     }
                 }
-                Tool::Picker => None,
+                Tool::Select | Tool::Picker => None,
             };
+            drop(sess);
 
             if let Some(item) = new_item {
-                items.borrow_mut().push(item.clone());
+                let mut itms = items.borrow_mut();
+                itms.push(item.clone());
+                drop(itms);
                 history.borrow_mut().push(HistoryAction::Add(item));
                 future.borrow_mut().clear();
+                set_selected_item_index.set(None);
+                set_selected_item_info.set(None);
                 redraw();
                 set_can_undo.set(true);
                 set_can_redo.set(false);
                 set_can_clear.set(true);
+            } else {
+                redraw();
             }
         })
     };
@@ -1751,16 +2026,17 @@ pub fn App() -> impl IntoView {
 
     let on_mouse_leave = {
         let action = on_mouse_up_action.clone();
+        let session = session.clone();
         move |_ev: MouseEvent| {
             set_picker_preview.set(None);
+            session.borrow_mut().hovered_item_index = None;
+            set_is_hovering_shape.set(false);
             action();
         }
     };
 
     let start_crop_drag = {
-        let crop_handle_state = crop_handle_state.clone();
-        let crop_start_mouse = crop_start_mouse.clone();
-        let current_crop_rect = current_crop_rect.clone();
+        let session = session.clone();
         let canvas_ref = canvas_ref.clone();
         move |handle: CropHandle, ev: MouseEvent| {
             ev.stop_propagation();
@@ -1768,25 +2044,24 @@ pub fn App() -> impl IntoView {
             if let Some(canvas) = canvas_ref.get() {
                 let w = canvas.width() as f64;
                 let h = canvas.height() as f64;
-                *crop_handle_state.borrow_mut() = Some(handle);
-                *crop_start_mouse.borrow_mut() = Point {
+                let mut sess = session.borrow_mut();
+                sess.crop_handle = Some(handle);
+                sess.crop_start_mouse = Point {
                     x: ev.client_x() as f64,
                     y: ev.client_y() as f64,
                 };
-                *current_crop_rect.borrow_mut() = Rect { x: 0.0, y: 0.0, w, h };
+                sess.current_crop_rect = Rect { x: 0.0, y: 0.0, w, h };
                 set_is_cropping_active.set(true);
             }
         }
     };
 
     let _ = window_event_listener(ev::mousemove, {
-        let crop_handle_state = crop_handle_state.clone();
-        let crop_start_mouse = crop_start_mouse.clone();
-        let current_crop_rect = current_crop_rect.clone();
+        let session = session.clone();
         let canvas_ref = canvas_ref.clone();
         let redraw = redraw_canvas.clone();
         move |ev: MouseEvent| {
-            let handle_opt = *crop_handle_state.borrow();
+            let handle_opt = session.borrow().crop_handle;
             if let Some(handle) = handle_opt {
                 if let Some(canvas) = canvas_ref.get() {
                     let total_w = canvas.width() as f64;
@@ -1795,8 +2070,12 @@ pub fn App() -> impl IntoView {
                     let scale_x = total_w / rect.width();
                     let scale_y = total_h / rect.height();
 
-                    let dx = (ev.client_x() as f64 - crop_start_mouse.borrow().x) * scale_x;
-                    let dy = (ev.client_y() as f64 - crop_start_mouse.borrow().y) * scale_y;
+                    let (start_mx, start_my) = {
+                        let sess = session.borrow();
+                        (sess.crop_start_mouse.x, sess.crop_start_mouse.y)
+                    };
+                    let dx = (ev.client_x() as f64 - start_mx) * scale_x;
+                    let dy = (ev.client_y() as f64 - start_my) * scale_y;
 
                     let mut min_x = 0.0f64;
                     let mut min_y = 0.0f64;
@@ -1842,7 +2121,7 @@ pub fn App() -> impl IntoView {
                     set_is_crop_snapped.set(is_snapped);
                     let crop_w = (max_x - min_x).max(20.0);
                     let crop_h = (max_y - min_y).max(20.0);
-                    *current_crop_rect.borrow_mut() = Rect { x: min_x, y: min_y, w: crop_w, h: crop_h };
+                    session.borrow_mut().current_crop_rect = Rect { x: min_x, y: min_y, w: crop_w, h: crop_h };
 
                     set_dimension_text.set(calculate_aspect_ratio_str(crop_w, crop_h));
 
@@ -1862,11 +2141,11 @@ pub fn App() -> impl IntoView {
                         ctx.fill_rect(min_x + crop_w, min_y, total_w - (min_x + crop_w), crop_h);
 
                         if is_snapped {
-                            ctx.set_stroke_style_str("#bef264");
+                            ctx.set_stroke_style_str("#ffffff");
                             ctx.set_line_width(2.0);
                             ctx.stroke_rect(min_x, min_y, crop_w, crop_h);
 
-                            ctx.set_stroke_style_str("rgba(190, 242, 100, 0.4)");
+                            ctx.set_stroke_style_str("rgba(255, 255, 255, 0.35)");
                             ctx.set_line_width(1.0);
                             ctx.begin_path();
                             ctx.move_to(min_x + crop_w / 3.0, min_y);
@@ -1891,9 +2170,8 @@ pub fn App() -> impl IntoView {
     });
 
     let _ = window_event_listener(ev::mouseup, {
-        let crop_handle_state = crop_handle_state.clone();
-        let current_crop_rect = current_crop_rect.clone();
-        let canvas_ref = canvas_ref.clone();
+        let session = session.clone();
+        let bg_canvas_ref = bg_canvas_ref.clone();
         let base_image = base_image.clone();
         let items = items.clone();
         let history = history.clone();
@@ -1901,15 +2179,18 @@ pub fn App() -> impl IntoView {
         let switch_img = switch_image.clone();
         let redraw = redraw_canvas.clone();
         move |_| {
-            if crop_handle_state.borrow().is_some() {
-                *crop_handle_state.borrow_mut() = None;
+            let had_handle = session.borrow().crop_handle.is_some();
+            if had_handle {
+                let mut sess = session.borrow_mut();
+                sess.crop_handle = None;
                 set_is_cropping_active.set(false);
                 set_is_crop_snapped.set(false);
 
-                let rect = current_crop_rect.borrow().clone();
-                if let Some(canvas) = canvas_ref.get() {
-                    let total_w = canvas.width() as f64;
-                    let total_h = canvas.height() as f64;
+                let rect = sess.current_crop_rect;
+                drop(sess);
+                if let Some(bg_canvas) = bg_canvas_ref.get() {
+                    let total_w = bg_canvas.width() as f64;
+                    let total_h = bg_canvas.height() as f64;
 
                     if rect.w > 10.0 && rect.h > 10.0 && (rect.w < total_w - 2.0 || rect.h < total_h - 2.0 || rect.x > 2.0 || rect.y > 2.0) {
                         let doc = match web_sys::window().and_then(|win| win.document()) {
@@ -1929,21 +2210,25 @@ pub fn App() -> impl IntoView {
                         };
 
                         let _ = off_ctx.draw_image_with_html_canvas_element_and_sw_and_sh_and_dx_and_dy_and_dw_and_dh(
-                            &canvas,
+                            &bg_canvas,
                             rect.x, rect.y, rect.w, rect.h,
                             0.0, 0.0, rect.w, rect.h,
                         );
 
                         let prev_img_data = base_image.borrow().as_ref().map(|i| i.src()).unwrap_or_default();
                         let prev_items_list = items.borrow().clone();
-                        let prev_w = canvas.width();
-                        let prev_h = canvas.height();
+                        let prev_w = bg_canvas.width();
+                        let prev_h = bg_canvas.height();
 
                         let new_img_data = off_canvas.to_data_url().unwrap_or_default();
                         let new_w = rect.w as u32;
                         let new_h = rect.h as u32;
 
-                        items.borrow_mut().clear();
+                        let mut new_items_list = prev_items_list.clone();
+                        for itm in new_items_list.iter_mut() {
+                            itm.translate(-rect.x, -rect.y);
+                        }
+                        *items.borrow_mut() = new_items_list.clone();
 
                         history.borrow_mut().push(HistoryAction::Crop {
                             prev_image_data: prev_img_data,
@@ -1951,7 +2236,7 @@ pub fn App() -> impl IntoView {
                             prev_width: prev_w,
                             prev_height: prev_h,
                             new_image_data: new_img_data.clone(),
-                            new_items: Vec::new(),
+                            new_items: new_items_list,
                             new_width: new_w,
                             new_height: new_h,
                         });
@@ -1961,7 +2246,7 @@ pub fn App() -> impl IntoView {
                         notify(format!("Recortado a {}x{}", new_w, new_h));
                         set_can_undo.set(true);
                         set_can_redo.set(false);
-                        set_can_clear.set(false);
+                        set_can_clear.set(!items.borrow().is_empty());
                     } else {
                         redraw();
                     }
@@ -2028,7 +2313,7 @@ pub fn App() -> impl IntoView {
             </div>
 
             <aside
-                class="absolute left-2.5 top-2.5 bottom-2.5 w-13 bg-zinc-900 border border-white/10 rounded-lg flex flex-col items-center py-2.5 justify-between z-40 shadow-2xl overflow-y-auto no-scrollbar"
+                class="absolute left-2.5 top-2.5 bottom-2.5 w-13 bg-zinc-900 border border-white/10 rounded-lg flex flex-col items-center py-2.5 justify-between z-40 shadow-2xl overflow-visible"
                 on:click=move |e| e.stop_propagation()
             >
                 <div class="flex flex-col items-center gap-1.5 w-full">
@@ -2036,7 +2321,7 @@ pub fn App() -> impl IntoView {
                         if !is_tiling.get() {
                             view! {
                                 <div
-                                    class="w-8.5 h-8.5 rounded-lg text-zinc-400 hover:text-zinc-200 flex items-center justify-center cursor-grab hover:bg-white/5 transition-colors duration-150"
+                                    class="w-8.5 h-8.5 rounded-lg text-zinc-400 hover:text-zinc-200 flex items-center justify-center cursor-grab active:cursor-grabbing hover:bg-white/5 transition-all duration-150"
                                     data-tauri-drag-region
                                 >
                                     <svg class="w-[18px] h-[18px] pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -2061,169 +2346,197 @@ pub fn App() -> impl IntoView {
                     <div class="relative tooltip-trigger w-full flex items-center justify-center">
                         <button
                             class=move || {
-                                let is_active = is_cropping_active.get();
+                                let is_active = !is_ocr_active.get() && active_tool.get() == Tool::Select;
                                 format!(
-                                    "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer {}",
+                                    "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer {}",
                                     if is_active { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
                                 )
                             }
-                            aria-label="Ajustar recorte"
+                            aria-label="Seleccionar (1)"
                             on:click=move |_| {
-                                let cur = is_cropping_active.get();
-                                set_is_cropping_active.set(!cur);
+                                set_picker_preview.set(None);
+                                set_is_ocr_active.set(false);
+                                set_active_tool.set(Tool::Select);
                             }
                         >
-                            <svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M6 2v14a2 2 0 0 0 2 2h14" />
-                                <path d="M18 22V8a2 2 0 0 0-2-2H2" />
-                            </svg>
+                            {render_tool_icon(Tool::Select)}
                         </button>
                         <div class="sidebar-tooltip px-2 py-1 bg-zinc-900 border border-white/10 text-zinc-200 text-[11px] font-medium rounded-lg shadow-xl">
-                            "Ajustar recorte"
+                            "Seleccionar · 1"
                         </div>
                     </div>
 
-                    <div class="accordion-group">
-                        <div class="relative tooltip-trigger w-full flex items-center justify-center">
+                    <div class=move || {
+                        let is_forced = forced_open_group.get() == Some(2);
+                        format!("relative group/freehand tooltip-trigger w-full h-8.5 flex items-center justify-center {}", if is_forced { "is-forced-open" } else { "" })
+                    }>
+                        <button
+                            class=move || {
+                                let active_t = active_tool.get();
+                                let is_act = !is_ocr_active.get() && (active_t == Tool::Pen || active_t == Tool::Highlighter);
+                                format!(
+                                    "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer relative {}",
+                                    if is_act { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
+                                )
+                            }
+                            aria-label=move || tool_info(selected_freehand_slot.get()).0
+                            on:click=move |_| {
+                                set_picker_preview.set(None);
+                                set_is_ocr_active.set(false);
+                                set_active_tool.set(selected_freehand_slot.get());
+                            }
+                        >
+                            {move || render_tool_icon(selected_freehand_slot.get())}
+                            <span class="w-1 h-1 rounded-full bg-zinc-500/70 absolute bottom-1 pointer-events-none" />
+                        </button>
+                        <div class="sidebar-tooltip px-2 py-1 bg-zinc-900 border border-white/10 text-zinc-200 text-[11px] font-medium rounded-lg shadow-xl">
+                            {move || tool_info(selected_freehand_slot.get()).1}
+                        </div>
+
+                        <div class="flyout-panel">
                             <button
                                 class=move || {
-                                    let t = active_tool.get();
-                                    let is_act = !is_ocr_active.get() && t == Tool::Pen;
+                                    let is_act = !is_ocr_active.get() && active_tool.get() == Tool::Pen;
                                     format!(
-                                        "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer {}",
+                                        "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer {}",
                                         if is_act { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
                                     )
                                 }
-                                aria-label="Lápiz (P)"
+                                title="Lápiz (2)"
                                 on:click=move |_| {
                                     set_picker_preview.set(None);
                                     set_is_ocr_active.set(false);
+                                    set_selected_freehand_slot.set(Tool::Pen);
                                     set_active_tool.set(Tool::Pen);
                                 }
                             >
-                                <svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M3.49977 18.9853V20.5H5.01449C6.24074 20.5 6.85387 20.5 7.40518 20.2716C7.9565 20.0433 8.39004 19.6097 9.25713 18.7426L19.1211 8.87868C20.0037 7.99612 20.4449 7.55483 20.4937 7.01325C20.5018 6.92372 20.5018 6.83364 20.4937 6.74411C20.4449 6.20253 20.0037 5.76124 19.1211 4.87868C18.2385 3.99612 17.7972 3.55483 17.2557 3.50605C17.1661 3.49798 17.0761 3.49798 16.9865 3.50605C16.4449 3.55483 16.0037 3.99612 15.1211 4.87868L5.25713 14.7426C4.39004 15.6097 3.9565 16.0433 3.72813 16.5946C3.49977 17.1459 3.49977 17.759 3.49977 18.9853Z" />
-                                    <path d="M13.5 6.5L17.5 10.5" />
-                                </svg>
+                                {render_tool_icon(Tool::Pen)}
                             </button>
-                            <div class="sidebar-tooltip px-2 py-1 bg-zinc-900 border border-white/10 text-zinc-200 text-[11px] font-medium rounded-lg shadow-xl">
-                                "Lápiz · P"
-                            </div>
-                        </div>
 
-                        <div class="accordion-drawer">
-                            <div class="accordion-drawer-inner">
-                                <div class="relative tooltip-trigger w-full flex items-center justify-center">
-                                    <button
-                                        class=move || {
-                                            let t = active_tool.get();
-                                            let is_act = !is_ocr_active.get() && t == Tool::Highlighter;
-                                            format!(
-                                                "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer {}",
-                                                if is_act { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
-                                            )
-                                        }
-                                        aria-label="Resaltar (H)"
-                                        on:click=move |_| {
-                                            set_picker_preview.set(None);
-                                            set_is_ocr_active.set(false);
-                                            set_active_tool.set(Tool::Highlighter);
-                                        }
-                                    >
-                                        <svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                                            <path d="M6.6777 16.2071L8.79289 18.3223M6.6777 16.2071L2.5 20.5H6.5L8.79289 18.3223M6.6777 16.2071C6.28717 15.8166 6.29534 15.1872 6.63537 14.752C7.42742 13.7383 7.71531 12.8216 7.79924 12.1382C7.89158 11.3863 8.07366 10.5734 8.60933 10.0377L9.50122 9.14828M8.79289 18.3223C9.18342 18.7128 9.81278 18.7047 10.248 18.3646C11.2617 17.5726 12.1784 17.2847 12.8618 17.2008C13.6137 17.1084 14.4266 16.9263 14.9623 16.3907L15.8517 15.4988M15.8517 15.4988L9.50122 9.14828M15.8517 15.4988C16.2422 15.8893 16.8754 15.8893 17.2659 15.4988L21.5 11.2647M9.50122 9.14828C9.1107 8.75776 9.1107 8.12459 9.50122 7.73407L13.7353 3.5" />
-                                        </svg>
-                                    </button>
-                                    <div class="sidebar-tooltip px-2 py-1 bg-zinc-900 border border-white/10 text-zinc-200 text-[11px] font-medium rounded-lg shadow-xl">
-                                        "Resaltar · H"
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="accordion-group">
-                        <div class="relative tooltip-trigger w-full flex items-center justify-center">
                             <button
                                 class=move || {
-                                    let t = active_tool.get();
-                                    let is_act = !is_ocr_active.get() && t == Tool::Rectangle;
+                                    let is_act = !is_ocr_active.get() && active_tool.get() == Tool::Highlighter;
                                     format!(
-                                        "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer {}",
+                                        "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer {}",
                                         if is_act { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
                                     )
                                 }
-                                aria-label="Rectángulo (R)"
+                                title="Resaltar (2)"
                                 on:click=move |_| {
                                     set_picker_preview.set(None);
                                     set_is_ocr_active.set(false);
+                                    set_selected_freehand_slot.set(Tool::Highlighter);
+                                    set_active_tool.set(Tool::Highlighter);
+                                }
+                            >
+                                {render_tool_icon(Tool::Highlighter)}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class=move || {
+                        let is_forced = forced_open_group.get() == Some(3);
+                        format!("relative group/shapes tooltip-trigger w-full h-8.5 flex items-center justify-center {}", if is_forced { "is-forced-open" } else { "" })
+                    }>
+                        <button
+                            class=move || {
+                                let active_t = active_tool.get();
+                                let is_act = !is_ocr_active.get() && (active_t == Tool::Rectangle || active_t == Tool::Arrow || active_t == Tool::Line || active_t == Tool::Circle);
+                                format!(
+                                    "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer relative {}",
+                                    if is_act { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
+                                )
+                            }
+                            aria-label=move || tool_info(selected_shape_slot.get()).0
+                            on:click=move |_| {
+                                set_picker_preview.set(None);
+                                set_is_ocr_active.set(false);
+                                set_active_tool.set(selected_shape_slot.get());
+                            }
+                        >
+                            {move || render_tool_icon(selected_shape_slot.get())}
+                            <span class="w-1 h-1 rounded-full bg-zinc-500/70 absolute bottom-1 pointer-events-none" />
+                        </button>
+                        <div class="sidebar-tooltip px-2 py-1 bg-zinc-900 border border-white/10 text-zinc-200 text-[11px] font-medium rounded-lg shadow-xl">
+                            {move || tool_info(selected_shape_slot.get()).1}
+                        </div>
+
+                        <div class="flyout-panel">
+                            <button
+                                class=move || {
+                                    let is_act = !is_ocr_active.get() && active_tool.get() == Tool::Rectangle;
+                                    format!(
+                                        "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer {}",
+                                        if is_act { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
+                                    )
+                                }
+                                title="Rectángulo (3)"
+                                on:click=move |_| {
+                                    set_picker_preview.set(None);
+                                    set_is_ocr_active.set(false);
+                                    set_selected_shape_slot.set(Tool::Rectangle);
                                     set_active_tool.set(Tool::Rectangle);
                                 }
                             >
-                                <svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M3.89124 3.89124C5.28249 2.5 7.52166 2.5 12 2.5C16.4783 2.5 18.7175 2.5 20.1088 3.89124C21.5 5.28249 21.5 7.52166 21.5 12C21.5 16.4783 21.5 18.7175 20.1088 20.1088C18.7175 21.5 16.4783 21.5 12 21.5C7.52166 21.5 5.28249 21.5 3.89124 20.1088C2.5 18.7175 2.5 16.4783 2.5 12C2.5 7.52166 2.5 5.28249 3.89124 3.89124Z" />
-                                </svg>
+                                {render_tool_icon(Tool::Rectangle)}
                             </button>
-                            <div class="sidebar-tooltip px-2 py-1 bg-zinc-900 border border-white/10 text-zinc-200 text-[11px] font-medium rounded-lg shadow-xl">
-                                "Rectángulo · R"
-                            </div>
-                        </div>
 
-                        <div class="accordion-drawer">
-                            <div class="accordion-drawer-inner">
-                                <div class="relative tooltip-trigger w-full flex items-center justify-center">
-                                    <button
-                                        class=move || {
-                                            let t = active_tool.get();
-                                            let is_act = !is_ocr_active.get() && t == Tool::Arrow;
-                                            format!(
-                                                "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer {}",
-                                                if is_act { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
-                                            )
-                                        }
-                                        aria-label="Flecha (A)"
-                                        on:click=move |_| {
-                                            set_picker_preview.set(None);
-                                            set_is_ocr_active.set(false);
-                                            set_active_tool.set(Tool::Arrow);
-                                        }
-                                    >
-                                        <svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                                            <path d="M14 12L4 12" />
-                                            <path d="M18.5859 13.6026L17.6194 14.3639C16.0536 15.5974 15.2707 16.2141 14.6354 15.9328C14 15.6515 14 14.6881 14 12.7613L14 11.2387C14 9.31191 14 8.34853 14.6354 8.06721C15.2707 7.7859 16.0536 8.40264 17.6194 9.63612L18.5858 10.3974C19.5286 11.1401 20 11.5115 20 12C20 12.4885 19.5286 12.8599 18.5859 13.6026Z" />
-                                        </svg>
-                                    </button>
-                                    <div class="sidebar-tooltip px-2 py-1 bg-zinc-900 border border-white/10 text-zinc-200 text-[11px] font-medium rounded-lg shadow-xl">
-                                        "Flecha · A"
-                                    </div>
-                                </div>
+                            <button
+                                class=move || {
+                                    let is_act = !is_ocr_active.get() && active_tool.get() == Tool::Arrow;
+                                    format!(
+                                        "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer {}",
+                                        if is_act { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
+                                    )
+                                }
+                                title="Flecha (3)"
+                                on:click=move |_| {
+                                    set_picker_preview.set(None);
+                                    set_is_ocr_active.set(false);
+                                    set_selected_shape_slot.set(Tool::Arrow);
+                                    set_active_tool.set(Tool::Arrow);
+                                }
+                            >
+                                {render_tool_icon(Tool::Arrow)}
+                            </button>
 
-                                <div class="relative tooltip-trigger w-full flex items-center justify-center">
-                                    <button
-                                        class=move || {
-                                            let t = active_tool.get();
-                                            let is_act = !is_ocr_active.get() && t == Tool::Circle;
-                                            format!(
-                                                "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer {}",
-                                                if is_act { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
-                                            )
-                                        }
-                                        aria-label="Círculo (C)"
-                                        on:click=move |_| {
-                                            set_picker_preview.set(None);
-                                            set_is_ocr_active.set(false);
-                                            set_active_tool.set(Tool::Circle);
-                                        }
-                                    >
-                                        <svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
-                                            <circle cx="12" cy="12" r="10" />
-                                        </svg>
-                                    </button>
-                                    <div class="sidebar-tooltip px-2 py-1 bg-zinc-900 border border-white/10 text-zinc-200 text-[11px] font-medium rounded-lg shadow-xl">
-                                        "Círculo · C"
-                                    </div>
-                                </div>
-                            </div>
+                            <button
+                                class=move || {
+                                    let is_act = !is_ocr_active.get() && active_tool.get() == Tool::Line;
+                                    format!(
+                                        "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer {}",
+                                        if is_act { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
+                                    )
+                                }
+                                title="Línea (3)"
+                                on:click=move |_| {
+                                    set_picker_preview.set(None);
+                                    set_is_ocr_active.set(false);
+                                    set_selected_shape_slot.set(Tool::Line);
+                                    set_active_tool.set(Tool::Line);
+                                }
+                            >
+                                {render_tool_icon(Tool::Line)}
+                            </button>
+
+                            <button
+                                class=move || {
+                                    let is_act = !is_ocr_active.get() && active_tool.get() == Tool::Circle;
+                                    format!(
+                                        "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer {}",
+                                        if is_act { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
+                                    )
+                                }
+                                title="Círculo (3)"
+                                on:click=move |_| {
+                                    set_picker_preview.set(None);
+                                    set_is_ocr_active.set(false);
+                                    set_selected_shape_slot.set(Tool::Circle);
+                                    set_active_tool.set(Tool::Circle);
+                                }
+                            >
+                                {render_tool_icon(Tool::Circle)}
+                            </button>
                         </div>
                     </div>
 
@@ -2235,7 +2548,7 @@ pub fn App() -> impl IntoView {
                                 let t = active_tool.get();
                                 let is_act = !is_ocr_active.get() && t == Tool::Blur;
                                 format!(
-                                    "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer {}",
+                                    "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer {}",
                                     if is_act { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
                                 )
                             }
@@ -2264,7 +2577,7 @@ pub fn App() -> impl IntoView {
                                 let t = active_tool.get();
                                 let is_act = !is_ocr_active.get() && t == Tool::Picker;
                                 format!(
-                                    "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer {}",
+                                    "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer {}",
                                     if is_act { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
                                 )
                             }
@@ -2288,7 +2601,7 @@ pub fn App() -> impl IntoView {
                         <button
                             class=move || {
                                 format!(
-                                    "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer relative {}",
+                                    "w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer relative {}",
                                     if is_ocr_active.get() { "bg-white/15 text-zinc-100" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
                                 )
                             }
@@ -2320,7 +2633,7 @@ pub fn App() -> impl IntoView {
                     <div class="accordion-group-colors">
                         <div class="relative tooltip-trigger w-full flex items-center justify-center">
                             <button
-                                class="w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-colors duration-150 cursor-pointer hover:bg-white/5"
+                                class="w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer hover:bg-white/5 relative"
                                 aria-label="Color y grosor"
                             >
                                 <span
@@ -2332,6 +2645,7 @@ pub fn App() -> impl IntoView {
                                         style=move || format!("width: {}px; height: {}px;", (stroke_width.get() / 3.5).clamp(2.0, 7.0), (stroke_width.get() / 3.5).clamp(2.0, 7.0))
                                     />
                                 </span>
+                                <span class="w-1 h-1 rounded-full bg-zinc-500/70 absolute bottom-1 pointer-events-none" />
                             </button>
                             <div class="sidebar-tooltip px-2 py-1 bg-zinc-900 border border-white/10 text-zinc-200 text-[11px] font-medium rounded-lg shadow-xl">
                                 {move || format!("Color y grosor ({}px)", stroke_width.get())}
@@ -2350,7 +2664,7 @@ pub fn App() -> impl IntoView {
                                             <button
                                                 class=move || {
                                                     format!(
-                                                        "w-3.5 h-3.5 rounded-full transition-colors duration-150 cursor-pointer border border-white/15 flex items-center justify-center {}",
+                                                        "w-3.5 h-3.5 rounded-full transition-all duration-150 cursor-pointer border border-white/15 flex items-center justify-center {}",
                                                         if is_active() { "ring-2 ring-white" } else { "opacity-80 hover:opacity-100" }
                                                     )
                                                 }
@@ -2371,7 +2685,7 @@ pub fn App() -> impl IntoView {
                                         view! {
                                             <button
                                                 class=move || format!(
-                                                    "w-full flex items-center justify-center py-1 px-1.5 rounded transition-colors duration-150 cursor-pointer {}",
+                                                    "w-full flex items-center justify-center py-1 px-1.5 rounded transition-all duration-150 cursor-pointer {}",
                                                     if is_active() { "bg-white/20 text-white" } else { "text-zinc-500 hover:text-zinc-200 hover:bg-white/5" }
                                                 )
                                                 aria-label=format!("Grosor {}px", width_val)
@@ -2391,7 +2705,7 @@ pub fn App() -> impl IntoView {
                     <div class="relative tooltip-trigger w-full flex items-center justify-center">
                         <button
                             class=move || format!(
-                                "w-8.5 h-8.5 rounded-lg transition-colors duration-150 flex items-center justify-center {}",
+                                "w-8.5 h-8.5 rounded-lg transition-all duration-150 flex items-center justify-center {}",
                                 if can_undo.get() { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5 cursor-pointer" } else { "text-zinc-600 cursor-not-allowed" }
                             )
                             aria-label="Deshacer (Ctrl+Z)"
@@ -2411,7 +2725,7 @@ pub fn App() -> impl IntoView {
                     <div class="relative tooltip-trigger w-full flex items-center justify-center">
                         <button
                             class=move || format!(
-                                "w-8.5 h-8.5 rounded-lg transition-colors duration-150 flex items-center justify-center {}",
+                                "w-8.5 h-8.5 rounded-lg transition-all duration-150 flex items-center justify-center {}",
                                 if can_redo.get() { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5 cursor-pointer" } else { "text-zinc-600 cursor-not-allowed" }
                             )
                             aria-label="Rehacer (Ctrl+Y)"
@@ -2431,7 +2745,7 @@ pub fn App() -> impl IntoView {
                     <div class="relative tooltip-trigger w-full flex items-center justify-center">
                         <button
                             class=move || format!(
-                                "w-8.5 h-8.5 rounded-lg transition-colors duration-150 flex items-center justify-center {}",
+                                "w-8.5 h-8.5 rounded-lg transition-all duration-150 flex items-center justify-center {}",
                                 if can_clear.get() { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5 cursor-pointer" } else { "text-zinc-600 cursor-not-allowed" }
                             )
                             aria-label="Limpiar lienzo"
@@ -2455,7 +2769,7 @@ pub fn App() -> impl IntoView {
                     <div class="relative tooltip-trigger w-full flex items-center justify-center">
                         <button
                             class=move || format!(
-                                "w-8.5 h-8.5 rounded-lg transition-colors duration-150 flex items-center justify-center cursor-pointer {}",
+                                "w-8.5 h-8.5 rounded-lg transition-all duration-150 flex items-center justify-center cursor-pointer {}",
                                 if copy_success.get() { "text-zinc-100 bg-white/15" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
                             )
                             aria-label="Copiar imagen (Ctrl+C)"
@@ -2487,7 +2801,7 @@ pub fn App() -> impl IntoView {
                     <div class="relative tooltip-trigger w-full flex items-center justify-center">
                         <button
                             class=move || format!(
-                                "w-8.5 h-8.5 rounded-lg transition-colors duration-150 flex items-center justify-center cursor-pointer {}",
+                                "w-8.5 h-8.5 rounded-lg transition-all duration-150 flex items-center justify-center cursor-pointer {}",
                                 if save_success.get() { "text-zinc-100 bg-white/15" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
                             )
                             aria-label="Guardar archivo (Ctrl+S)"
@@ -2518,10 +2832,10 @@ pub fn App() -> impl IntoView {
                     <div class="relative tooltip-trigger w-full flex items-center justify-center">
                         <button
                             class=move || format!(
-                                "w-8.5 h-8.5 rounded-lg transition-colors duration-150 flex items-center justify-center cursor-pointer {}",
+                                "w-8.5 h-8.5 rounded-lg transition-all duration-150 flex items-center justify-center cursor-pointer {}",
                                 if show_gallery.get() { "text-zinc-100 bg-white/15" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
                             )
-                            aria-label="Snapshots recientes (Tab)"
+                            aria-label="Biblioteca (Tab)"
                             on:click=move |_| open_gallery()
                         >
                             <svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2532,7 +2846,7 @@ pub fn App() -> impl IntoView {
                             </svg>
                         </button>
                         <div class="sidebar-tooltip px-2 py-1 bg-zinc-900 border border-white/10 text-zinc-200 text-[11px] font-medium rounded-lg shadow-xl">
-                            "Snapshots recientes · Tab"
+                            "Biblioteca · Tab"
                         </div>
                     </div>
                 </div>
@@ -2558,12 +2872,25 @@ pub fn App() -> impl IntoView {
                     }
                 >
                     <canvas
+                        node_ref=bg_canvas_ref
+                        class="block max-w-full max-h-[calc(100vh-1.5rem)] object-contain rounded-sm pointer-events-none"
+                    />
+                    <canvas
                         node_ref=canvas_ref
                         class=move || {
-                            let z = zoom_level.get();
+                            let is_drag = is_dragging_shape.get();
+                            let is_hov = is_hovering_shape.get();
+                            let tool = active_tool.get();
+                            let cursor = if is_drag {
+                                "cursor-grabbing"
+                            } else if tool == Tool::Select {
+                                if is_hov { "cursor-move" } else { "cursor-default" }
+                            } else {
+                                "cursor-crosshair"
+                            };
                             format!(
-                                "cursor-crosshair block max-w-full max-h-[calc(100vh-1.5rem)] object-contain rounded-sm {}",
-                                if z > 2.0 { "[image-rendering:pixelated]" } else { "" }
+                                "{} absolute inset-0 w-full h-full block max-w-full max-h-[calc(100vh-1.5rem)] object-contain rounded-sm pointer-events-auto",
+                                cursor
                             )
                         }
                         on:mousedown=on_mouse_down
@@ -2645,7 +2972,7 @@ pub fn App() -> impl IntoView {
                                                     let open_u = open_url.clone();
                                                     view! {
                                                         <button
-                                                            class=format!("absolute {} z-50 flex items-center gap-1 px-1.5 py-0.5 rounded bg-zinc-900 border border-white/20 text-[10.5px] text-[#bef264] shadow-xl pointer-events-auto cursor-pointer hover:bg-zinc-800 hover:text-white transition-colors whitespace-nowrap", pos_class)
+                                                            class=format!("absolute {} z-50 flex items-center gap-1 px-1.5 py-0.5 rounded bg-zinc-900 border border-white/20 text-[10.5px] text-zinc-200 shadow-xl pointer-events-auto cursor-pointer hover:bg-zinc-800 hover:text-white transition-colors whitespace-nowrap", pos_class)
                                                             style=format!("left: {:.2}%;", rel_left)
                                                             on:click=move |e| {
                                                                 e.stop_propagation();
@@ -2653,7 +2980,7 @@ pub fn App() -> impl IntoView {
                                                                 open_u(u.clone());
                                                             }
                                                         >
-                                                            <svg class="w-2.5 h-2.5 text-[#bef264]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                            <svg class="w-2.5 h-2.5 text-zinc-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                                                 <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
                                                                 <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
                                                             </svg>
@@ -2687,7 +3014,117 @@ pub fn App() -> impl IntoView {
                             </div>
                         }.into_any()
                     } else {
-                        view! { <span></span> }.into_any()
+                        view! { <span class="hidden" /> }.into_any()
+                    }}
+
+                    {move || {
+                        let key = selection_gen.get();
+                        if is_dragging_shape.get() {
+                            return view! { <span class="hidden" /> }.into_any();
+                        }
+                        if let Some((bx, by, bw, _bh, current_color, current_width)) = selected_item_info.get() {
+                            let (img_w, img_h) = image_dimensions.get();
+                            let safe_w = if img_w > 0.0 { img_w } else { 1.0 };
+                            let safe_h = if img_h > 0.0 { img_h } else { 1.0 };
+
+                            let left_pct = ((bx + bw / 2.0) / safe_w * 100.0).clamp(6.0, 94.0);
+                            let top_pct = (by / safe_h * 100.0).clamp(0.0, 100.0);
+                            let place_below = top_pct < 12.0;
+                            let base_transform = if place_below {
+                                "translate(-50%, 0%) translateY(12px)"
+                            } else {
+                                "translate(-50%, -100%) translateY(-12px)"
+                            };
+
+                            view! {
+                                <div
+                                    attr:data-gen=key
+                                    class="absolute z-50 flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-zinc-900/95 border border-white/10 shadow-2xl backdrop-blur-md pointer-events-auto select-none animate-menu-fade-up"
+                                    style=format!("left: {:.2}%; top: {:.2}%; --menu-transform: {};", left_pct, top_pct, base_transform)
+                                    on:click=move |e| e.stop_propagation()
+                                    on:mousedown=move |e| e.stop_propagation()
+                                >
+                                    {if let Some(c_str) = current_color {
+                                        view! {
+                                            <div class="flex items-center gap-1.5 pr-1.5 border-r border-white/10">
+                                                {COLOR_LIST.iter().take(6).map(|&(hex, _)| {
+                                                    let hex_str = hex.to_string();
+                                                    let hex_apply = hex_str.clone();
+                                                    let is_cur = c_str == hex;
+                                                    view! {
+                                                        <button
+                                                            class=format!(
+                                                                "w-4 h-4 rounded-full transition-colors cursor-pointer {}",
+                                                                if is_cur { "ring-2 ring-white ring-offset-1 ring-offset-zinc-900 opacity-100" } else { "opacity-75 hover:opacity-100" }
+                                                            )
+                                                            style=format!("background-color: {}", hex_str)
+                                                            on:click=move |_| set_trigger_change_color.set(Some(hex_apply.clone()))
+                                                        />
+                                                    }
+                                                }).collect_view()}
+                                            </div>
+                                        }.into_any()
+                                    } else {
+                                        view! { <span class="hidden" /> }.into_any()
+                                    }}
+
+                                    {if let Some(w) = current_width {
+                                        view! {
+                                            <button
+                                                class="px-2 py-1 rounded-lg text-xs font-medium text-zinc-300 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-1.5 cursor-pointer"
+                                                title="Cambiar grosor"
+                                                on:click=move |_| set_trigger_cycle_width.update(|n| *n = n.wrapping_add(1))
+                                            >
+                                                <span class="w-1.5 h-1.5 rounded-full bg-white/70" />
+                                                {format!("{:.0}px", w)}
+                                            </button>
+                                        }.into_any()
+                                    } else {
+                                        view! { <span class="hidden" /> }.into_any()
+                                    }}
+
+                                    <div class="w-px h-4 bg-white/10" />
+
+                                    <button
+                                        class="w-6.5 h-6.5 rounded-lg flex items-center justify-center text-zinc-400 hover:text-zinc-100 hover:bg-white/10 transition-colors cursor-pointer"
+                                        title="Duplicar (Ctrl+D)"
+                                        on:click=move |_| set_trigger_duplicate.update(|n| *n = n.wrapping_add(1))
+                                    >
+                                        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                                        </svg>
+                                    </button>
+
+                                    <button
+                                        class="w-6.5 h-6.5 rounded-lg flex items-center justify-center text-zinc-400 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
+                                        title="Eliminar (Supr)"
+                                        on:click=move |_| set_trigger_delete.update(|n| *n = n.wrapping_add(1))
+                                    >
+                                        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M3 6h18" />
+                                            <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                                            <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                                        </svg>
+                                    </button>
+
+                                    <button
+                                        class="w-6 h-6 rounded-lg flex items-center justify-center text-zinc-500 hover:text-zinc-300 hover:bg-white/5 transition-colors cursor-pointer"
+                                        title="Deseleccionar (Esc)"
+                                        on:click=move |_| {
+                                            set_selected_item_index.set(None);
+                                            set_selected_item_info.set(None);
+                                        }
+                                    >
+                                        <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M18 6L6 18M6 6l12 12" />
+                                        </svg>
+                                    </button>
+                                </div>
+                            }.into_any()
+                        } else {
+                            view! { <span class="hidden" /> }.into_any()
+                        }
                     }}
 
                     <div
@@ -2756,7 +3193,7 @@ pub fn App() -> impl IntoView {
                                 <div class=move || {
                                     format!(
                                         "absolute -bottom-7 left-1/2 -translate-x-1/2 bg-zinc-900 {} border border-white/10 px-2.5 py-0.5 rounded-lg text-[10px] font-mono shadow-xl pointer-events-none transition-all duration-150 {}",
-                                        if snapped { "text-[#bef264] ring-1 ring-[#bef264]/40" } else { "text-zinc-300" },
+                                        if snapped { "text-white ring-1 ring-white/30 bg-white/10" } else { "text-zinc-300" },
                                         if active { "opacity-100 ring-1 ring-white/30" } else { "opacity-0 group-hover:opacity-90" }
                                     )
                                 }>
@@ -2914,10 +3351,10 @@ pub fn App() -> impl IntoView {
                                             let open_u = open_url.clone();
                                             view! {
                                                 <button
-                                                    class="px-2 py-1 text-[11px] font-medium rounded-md bg-zinc-800 text-[#bef264] border border-white/10 hover:bg-zinc-700 transition-colors cursor-pointer flex items-center gap-1 shadow-xs"
+                                                    class="px-2 py-1 text-[11px] font-medium rounded-md bg-zinc-800 text-zinc-200 border border-white/10 hover:bg-zinc-700 hover:text-white transition-colors cursor-pointer flex items-center gap-1 shadow-xs"
                                                     on:click=move |_| open_u(u.clone())
                                                 >
-                                                    <svg class="w-3 h-3 text-[#bef264]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                    <svg class="w-3 h-3 text-zinc-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                                         <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
                                                         <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
                                                     </svg>
@@ -3060,37 +3497,22 @@ pub fn App() -> impl IntoView {
                 >
                     <div class="flex items-center justify-between shrink-0 pb-2 border-b border-white/10">
                         <div class="flex items-center gap-2">
-                            <svg class="w-4 h-4 text-[#bef264]" viewBox="0 0 24 24" fill="currentColor">
-                                <path d="M12 2L14.4 9.6L22 12L14.4 14.4L12 22L9.6 14.4L2 12L9.6 9.6L12 2Z" />
+                            <svg class="w-4 h-4 text-zinc-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                                <circle cx="8.5" cy="8.5" r="1.5" />
+                                <polyline points="21 15 16 10 5 21" />
                             </svg>
-                            <h2 class="text-xs font-semibold text-zinc-100 tracking-tight">"Snapshots"</h2>
+                            <h2 class="text-xs font-semibold text-zinc-200 tracking-tight">"Biblioteca"</h2>
                         </div>
-                        <div class="flex items-center gap-1">
-                            <button
-                                class="text-zinc-400 hover:text-[#bef264] p-1 rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
-                                aria-label="Actualizar capturas"
-                                on:click={
-                                    let f = fetch_gallery.clone();
-                                    move |_| f(0, false)
-                                }
-                            >
-                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                                    <path d="M3 3v5h5" />
-                                    <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
-                                    <path d="M16 21h5v-5" />
-                                </svg>
-                            </button>
-                            <button
-                                class="text-zinc-400 hover:text-zinc-100 p-1 rounded-lg hover:bg-white/5 transition-colors cursor-pointer"
-                                aria-label="Cerrar panel de snapshots"
-                                on:click=move |_| close_gallery()
-                            >
-                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M18 6L12 12M12 12L6 18M12 12L18 18M12 12L6 6" />
-                                </svg>
-                            </button>
-                        </div>
+                        <button
+                            class="text-zinc-400 hover:text-zinc-100 p-1 rounded-lg hover:bg-white/5 transition-all duration-150 cursor-pointer"
+                            aria-label="Cerrar biblioteca"
+                            on:click=move |_| close_gallery()
+                        >
+                            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M18 6L12 12M12 12L6 18M12 12L18 18M12 12L6 6" />
+                            </svg>
+                        </button>
                     </div>
 
                     <div
@@ -3111,7 +3533,7 @@ pub fn App() -> impl IntoView {
                                             {(0..3).map(|i| {
                                                 view! {
                                                     <div
-                                                        class="aspect-video w-full rounded-lg bg-zinc-950 border border-white/10 animate-skeleton"
+                                                        class="aspect-video w-full rounded-xl bg-zinc-950/80 border border-white/10 animate-skeleton"
                                                         style=format!("animation-delay: {}ms;", i * 60)
                                                     />
                                                 }
@@ -3124,7 +3546,7 @@ pub fn App() -> impl IntoView {
                                             <svg class="w-7 h-7 text-zinc-600 mb-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                                                 <path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" stroke-linecap="round" stroke-linejoin="round" />
                                             </svg>
-                                            <p class="font-medium text-zinc-300 text-xs">"Sin capturas en el historial"</p>
+                                            <p class="font-medium text-zinc-300 text-xs">"Sin capturas en la biblioteca"</p>
                                             <p class="text-[11px] text-zinc-500 max-w-[200px]">"Las capturas que tomes se indexarán aquí automáticamente."</p>
                                         </div>
                                     }.into_any()
@@ -3149,11 +3571,11 @@ pub fn App() -> impl IntoView {
                                                     class=move || {
                                                         let is_active = selected_gallery_path.get().as_deref() == Some(&p_card);
                                                         format!(
-                                                            "group rounded-lg overflow-hidden cursor-pointer bg-zinc-950 border transition-colors duration-150 flex flex-col shadow-sm {}",
+                                                            "group relative rounded-xl overflow-hidden cursor-pointer bg-zinc-950 border transition-colors duration-150 aspect-video w-full flex items-center justify-center {}",
                                                             if is_active {
-                                                                "border-[#bef264]"
+                                                                "border-white/50 ring-1 ring-white/20"
                                                             } else {
-                                                                "border-white/10 hover:border-[#bef264]/60 hover:bg-zinc-900/80"
+                                                                "border-white/10 hover:border-white/25"
                                                             }
                                                         )
                                                     }
@@ -3167,29 +3589,24 @@ pub fn App() -> impl IntoView {
                                                         }
                                                     }
                                                 >
-                                                    <div class="aspect-video w-full relative overflow-hidden bg-black/50">
-                                                        <img
-                                                            src=item.preview_base64
-                                                            alt=item.filename.clone()
-                                                            class="w-full h-full object-cover select-none pointer-events-none"
-                                                        />
-                                                    </div>
+                                                    <img
+                                                        src=item.preview_base64
+                                                        alt=item.filename.clone()
+                                                        class="absolute inset-0 w-full h-full object-cover select-none pointer-events-none"
+                                                    />
 
-                                                    <div class="p-2 bg-zinc-950 flex items-center justify-between gap-2 border-t border-white/5">
-                                                        <div class="flex flex-col min-w-0 pr-1">
-                                                            <span class="text-[11px] font-medium text-zinc-200 truncate">
-                                                                {item.filename}
-                                                            </span>
-                                                            <span class="text-[9.5px] text-zinc-500 font-mono">
-                                                                {if !dim_label.is_empty() {
-                                                                    format!("{} · {}", dim_label, date_formatted)
-                                                                } else {
-                                                                    date_formatted
-                                                                }}
-                                                            </span>
-                                                        </div>
-                                                        <span class="shrink-0 text-[10px] text-[#bef264] px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity font-medium">
-                                                            "Cargar"
+                                                    <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/35 to-transparent pointer-events-none" />
+
+                                                    <div class="absolute inset-x-0 bottom-0 p-2.5 flex flex-col justify-end min-w-0 pointer-events-none">
+                                                        <span class="text-[11.5px] font-medium text-zinc-100 group-hover:text-white transition-colors truncate drop-shadow-sm">
+                                                            {item.filename}
+                                                        </span>
+                                                        <span class="text-[9.5px] text-zinc-300 font-mono tracking-tight drop-shadow-sm">
+                                                            {if !dim_label.is_empty() {
+                                                                format!("{} · {}", dim_label, date_formatted)
+                                                            } else {
+                                                                date_formatted
+                                                            }}
                                                         </span>
                                                     </div>
                                                 </div>
@@ -3200,7 +3617,7 @@ pub fn App() -> impl IntoView {
                                             let f_more = fetch_more.clone();
                                             view! {
                                                 <button
-                                                    class="w-full py-2 rounded-lg bg-zinc-950 hover:bg-zinc-800 text-zinc-300 hover:text-zinc-100 text-xs font-medium border border-white/10 transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                                                    class="w-full py-2 rounded-lg bg-zinc-950 hover:bg-zinc-800 text-zinc-300 hover:text-zinc-100 text-xs font-medium border border-white/10 transition-colors duration-150 flex items-center justify-center gap-2 cursor-pointer"
                                                     disabled=is_loading
                                                     on:click=move |_| f_more(items_len, true)
                                                 >
