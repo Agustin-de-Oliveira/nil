@@ -9,5 +9,7 @@ bin/
 *.swp
 *.swo
 *~
-.DS_Store
-Thumbs.db
+thumbs.db
+docs/
+.docs/
+
