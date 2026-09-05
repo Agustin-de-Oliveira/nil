@@ -56,9 +56,45 @@ pub struct GalleryResponse {
     pub has_more: bool,
 }
 
+pub fn get_nil_config_dir() -> PathBuf {
+    let base = env::var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            PathBuf::from(home).join(".config")
+        });
+    let path = base.join("nil");
+    let _ = fs::create_dir_all(&path);
+    path
+}
+
+pub fn get_nil_data_dir() -> PathBuf {
+    let base = env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            PathBuf::from(home).join(".local").join("share")
+        });
+    let path = base.join("nil");
+    let _ = fs::create_dir_all(&path);
+    path
+}
+
+pub fn get_shots_data_dir() -> PathBuf {
+    let path = get_nil_data_dir().join("shots");
+    let _ = fs::create_dir_all(&path);
+    path
+}
+
+pub fn get_notes_data_dir() -> PathBuf {
+    let path = get_nil_data_dir().join("notes");
+    let _ = fs::create_dir_all(&path);
+    path
+}
+
 pub fn get_config_dir() -> PathBuf {
+    let new_path = get_nil_config_dir().join("nil-shot");
     let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let new_path = PathBuf::from(&home).join(".config").join("nil").join("nil-shot");
     let legacy_path = PathBuf::from(&home).join(".config").join("screenshot-tool");
     if !new_path.exists() && legacy_path.exists() {
         return legacy_path;
@@ -176,16 +212,19 @@ pub fn get_png_dimensions(path: &PathBuf) -> (u32, u32) {
 }
 
 pub fn get_screenshots_dirs() -> Vec<PathBuf> {
-    let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
     let mut dirs = Vec::new();
+    let shots_dir = get_shots_data_dir();
+    dirs.push(shots_dir);
+
+    let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
     let home_path = PathBuf::from(&home);
 
     let spanish_capturas = home_path.join("Im\u{00e1}genes").join("Capturas de pantalla");
-    if spanish_capturas.exists() {
+    if spanish_capturas.exists() && !dirs.contains(&spanish_capturas) {
         dirs.push(spanish_capturas);
     }
     let english_screenshots = home_path.join("Pictures").join("Screenshots");
-    if english_screenshots.exists() {
+    if english_screenshots.exists() && !dirs.contains(&english_screenshots) {
         dirs.push(english_screenshots);
     }
     let pictures = home_path.join("Pictures");
@@ -742,10 +781,16 @@ pub struct ClipboardItem {
 }
 
 pub fn get_clipboard_data_dir() -> PathBuf {
-    let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let path = PathBuf::from(home).join(".local").join("share").join("nil").join("nil-clip");
+    let path = get_nil_data_dir().join("clip");
     let _ = fs::create_dir_all(&path);
     let _ = fs::create_dir_all(path.join("images"));
+    let new_file = path.join("history.json");
+    if !new_file.exists() {
+        let legacy_file = get_nil_data_dir().join("nil-clip").join("history.json");
+        if legacy_file.exists() {
+            let _ = fs::copy(&legacy_file, &new_file);
+        }
+    }
     path
 }
 
@@ -972,3 +1017,65 @@ pub fn clear_clipboard_history() -> Result<(), String> {
 
     save_clipboard_history(&to_keep)
 }
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Note {
+    pub id: String,
+    pub title: String,
+    pub content: String,
+    pub updated_at: u64,
+    #[serde(default)]
+    pub archived_at: Option<u64>,
+}
+
+pub fn load_notes() -> Vec<Note> {
+    let path = get_notes_data_dir().join("notes.json");
+    if !path.exists() {
+        let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        let legacy = PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("nil-notes")
+            .join("notes.json");
+        if legacy.exists() {
+            let _ = fs::copy(&legacy, &path);
+        }
+    }
+    if let Ok(content) = fs::read_to_string(path) {
+        if let Ok(items) = serde_json::from_str::<Vec<Note>>(&content) {
+            return items;
+        }
+    }
+    Vec::new()
+}
+
+pub fn save_notes(notes: &[Note]) -> Result<(), String> {
+    let path = get_notes_data_dir().join("notes.json");
+    let json = serde_json::to_string_pretty(notes).map_err(|e| e.to_string())?;
+    fs::write(path, json).map_err(|e| e.to_string())
+}
+
+pub fn generate_note_id() -> String {
+    let d = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("{:x}{:08x}", d.as_secs(), d.subsec_nanos())
+}
+
+pub fn create_note_with_content(title: &str, content: &str) -> Result<Note, String> {
+    let mut notes = load_notes();
+    let note = Note {
+        id: generate_note_id(),
+        title: title.to_string(),
+        content: content.to_string(),
+        updated_at: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+        archived_at: None,
+    };
+    notes.insert(0, note.clone());
+    save_notes(&notes)?;
+    Ok(note)
+}
+

@@ -1893,6 +1893,7 @@ dependencies = [
 name = "nil-notes"
 version = "0.1.0"
 dependencies = [
+ "nil-core",
  "serde",
  "serde_json",
  "tauri",
