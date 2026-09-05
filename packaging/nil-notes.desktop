@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=nil-notes
+Comment=Bloc de notas flotante y editor rapido
+Exec=nil-notes
+Icon=nil-notes
+Terminal=false
+Type=Application
+Categories=Utility;TextEditor;
+Keywords=notes;scratchpad;markdown;
+StartupWMClass=nil-notes

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=nil-clip
+Comment=Gestor de historial de portapapeles
+Exec=nil-clip
+Icon=nil-clip
+Terminal=false
+Type=Application
+Categories=Utility;
+Keywords=clipboard;history;paste;
+StartupWMClass=nil-clip

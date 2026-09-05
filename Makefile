@@ -1,4 +1,4 @@
-.PHONY: help shot clip notes build build-shot build-clip build-notes build-frontends check clean
+.PHONY: help shot clip notes build build-shot build-clip build-notes build-frontends install check clean
 
 help:
 	@echo "nil suite:"
@@ -6,6 +6,7 @@ help:
 	@echo "  make clip        - Inicia nil-clip en modo dev"
 	@echo "  make notes       - Inicia nil-notes en modo dev"
 	@echo "  make build       - Compila los 3 frontends y binarios release del workspace"
+	@echo "  make install     - Compila e instala la suite en ~/.local/bin y aplicaciones"
 	@echo "  make check       - Verifica codigo con cargo check"
 	@echo "  make clean       - Limpia target/ y dist/"
 
@@ -13,7 +14,7 @@ shot:
 	@(cd frontend/nil-shot && ../../bin/trunk serve) & TRUNK_PID=$$!; \
 	trap 'kill $$TRUNK_PID 2>/dev/null' EXIT INT TERM; \
 	sleep 1; \
-	cargo run -p nil-shot
+	cargo run -p nil-shot -- --edit
 
 clip:
 	@(cd frontend/nil-clip && ../../bin/trunk serve) & TRUNK_PID=$$!; \
@@ -46,6 +47,9 @@ build-frontends:
 
 build: build-frontends
 	@cargo build --workspace --release
+
+install: build
+	@./install.sh
 
 check:
 	@cargo check --workspace

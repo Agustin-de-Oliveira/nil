@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=nil-shot
+Comment=Herramienta de captura y anotacion de pantalla
+Exec=nil-shot
+Icon=nil-shot
+Terminal=false
+Type=Application
+Categories=Utility;Graphics;
+Keywords=screenshot;capture;ocr;annotation;
+StartupWMClass=nil-shot
