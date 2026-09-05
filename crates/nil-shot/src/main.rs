@@ -2,10 +2,11 @@
 
 use base64::Engine;
 use nil_core::{
-    capture_area_image, capture_full_image, copy_image_bytes_to_clipboard,
-    copy_text_bytes_to_clipboard, generate_temp_path, get_config_dir, get_hold_lock_path,
-    get_png_dimensions, list_gallery_items, load_config, notify_and_maybe_edit,
-    run_tesseract, save_config_file, Config, GalleryResponse, OcrBlock,
+    add_clipboard_image, add_clipboard_text, capture_area_image, capture_full_image,
+    copy_image_bytes_to_clipboard, copy_text_bytes_to_clipboard, create_note_with_content,
+    generate_temp_path, get_config_dir, get_hold_lock_path, get_png_dimensions,
+    get_shots_data_dir, list_gallery_items, load_config, notify_and_maybe_edit, run_tesseract,
+    save_config_file, Config, GalleryResponse, OcrBlock,
 };
 use std::env;
 use std::fs;
@@ -96,12 +97,53 @@ fn copy_to_clipboard(data_base64: Option<String>) -> Result<(), String> {
         .decode(raw.trim())
         .map_err(|e| format!("Base64 decode error: {}", e))?;
 
+    let _ = add_clipboard_image(&bytes);
     copy_image_bytes_to_clipboard(&bytes)
 }
 
 #[tauri::command]
 fn copy_text_to_clipboard(text: String) -> Result<(), String> {
+    let _ = add_clipboard_text(&text);
     copy_text_bytes_to_clipboard(&text)
+}
+
+#[tauri::command]
+fn send_to_notes(data_base64: Option<String>, text: Option<String>) -> Result<(), String> {
+    if let Some(t) = text {
+        if !t.trim().is_empty() {
+            create_note_with_content("OCR Snippet", &t)?;
+            let _ = Command::new("nil-notes").spawn();
+            return Ok(());
+        }
+    }
+
+    if let Some(data) = data_base64 {
+        let raw = if let Some(idx) = data.find(',') {
+            &data[idx + 1..]
+        } else {
+            &data
+        };
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(raw.trim())
+            .map_err(|e| format!("Base64 decode error: {}", e))?;
+
+        let filename = format!(
+            "shot_{}.png",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        );
+        let path = get_shots_data_dir().join(&filename);
+        fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+
+        let markdown = format!("![Captura](file://{})", path.to_string_lossy());
+        create_note_with_content("Captura", &markdown)?;
+        let _ = Command::new("nil-notes").spawn();
+        return Ok(());
+    }
+
+    Err("No se proporcionaron datos para la nota".to_string())
 }
 
 #[tauri::command]
@@ -323,6 +365,7 @@ fn launch_tauri(image_path: Option<PathBuf>, config_path: PathBuf) {
             resize_window,
             copy_to_clipboard,
             copy_text_to_clipboard,
+            send_to_notes,
             save_image,
             toggle_pin_window,
             is_tiling_desktop,

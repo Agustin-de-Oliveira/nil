@@ -1,59 +1,44 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::PathBuf;
+use nil_core::{create_note_with_content, load_notes, save_notes, Note};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
 
-#[derive(Serialize, Deserialize, Clone)]
-struct Note {
-    id: String,
-    title: String,
-    content: String,
-    updated_at: u64,
-    #[serde(default)]
-    archived_at: Option<u64>,
-}
-
-fn notes_path() -> PathBuf {
-    let mut path = dirs_next();
-    path.push("nil-notes");
-    fs::create_dir_all(&path).ok();
-    path.push("notes.json");
-    path
-}
-
-fn dirs_next() -> PathBuf {
-    std::env::var("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let mut h = PathBuf::from(std::env::var("HOME").unwrap_or_default());
-            h.push(".local/share");
-            h
-        })
-}
-
 fn now_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
 }
 
-fn load_notes() -> Vec<Note> {
-    let path = notes_path();
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-fn save_notes(notes: &[Note]) -> Result<(), String> {
-    let path = notes_path();
-    serde_json::to_string(notes)
-        .map_err(|e| e.to_string())
-        .and_then(|s| fs::write(&path, s).map_err(|e| e.to_string()))
+fn handle_cli_args() {
+    let args: Vec<String> = std::env::args().collect();
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--new-note" => {
+                if let Some(content) = args.get(i + 1) {
+                    let title = if content.lines().count() > 1 {
+                        "Nota"
+                    } else {
+                        "Nota Rápida"
+                    };
+                    let _ = create_note_with_content(title, content);
+                    i += 1;
+                }
+            }
+            "--attach-image" => {
+                if let Some(path) = args.get(i + 1) {
+                    let markdown = format!("![Captura](file://{})", path);
+                    let _ = create_note_with_content("Captura", &markdown);
+                    i += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
 }
 
 #[tauri::command]
@@ -138,6 +123,7 @@ fn close_window(window: tauri::WebviewWindow) -> Result<(), String> {
 }
 
 fn main() {
+    handle_cli_args();
     tauri::Builder::default()
         .setup(|app| {
             let _window = WebviewWindowBuilder::new(

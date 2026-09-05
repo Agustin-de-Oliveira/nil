@@ -49,6 +49,28 @@ fn clear_history() -> Result<(), String> {
 }
 
 #[tauri::command]
+fn create_note_from_clipboard(id: String) -> Result<(), String> {
+    let items = load_clipboard_history();
+    if let Some(item) = items.into_iter().find(|i| i.id == id) {
+        if item.kind == ClipboardKind::Image {
+            let markdown = format!("![Captura](file://{})", item.content);
+            nil_core::create_note_with_content("Imagen Portapapeles", &markdown)?;
+        } else {
+            let title = if item.content.lines().count() > 1 {
+                "Snippet Portapapeles"
+            } else {
+                "Nota Portapapeles"
+            };
+            nil_core::create_note_with_content(title, &item.content)?;
+        }
+        let _ = Command::new("nil-notes").spawn();
+        Ok(())
+    } else {
+        Err("Elemento no encontrado".to_string())
+    }
+}
+
+#[tauri::command]
 fn close_window(window: WebviewWindow) -> Result<(), String> {
     let _ = window.close();
     std::process::exit(0);
@@ -156,6 +178,7 @@ fn launch_tauri() {
             delete_item,
             toggle_pin_item,
             clear_history,
+            create_note_from_clipboard,
             close_window
         ])
         .run(tauri::generate_context!())
