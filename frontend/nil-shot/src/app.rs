@@ -49,6 +49,8 @@ pub fn App() -> impl IntoView {
     let (stroke_width, set_stroke_width) = signal(4.0f64);
     let (status_text, set_status_text) = signal(String::new());
     let (show_gallery, set_show_gallery) = signal(false);
+    let (show_settings, set_show_settings) = signal(false);
+    let (app_config, set_app_config) = signal(AppConfig::default());
     let (gallery_items, set_gallery_items) = signal(Vec::<GalleryItem>::new());
     let (_gallery_total, set_gallery_total) = signal(0usize);
     let (gallery_has_more, set_gallery_has_more) = signal(false);
@@ -104,6 +106,7 @@ pub fn App() -> impl IntoView {
     let (trigger_cycle_width, set_trigger_cycle_width) = signal(0u32);
     let (trigger_duplicate, set_trigger_duplicate) = signal(0u32);
     let (trigger_delete, set_trigger_delete) = signal(0u32);
+    let (trigger_rotate, set_trigger_rotate) = signal(None::<(u32, bool)>);
 
     let trigger_forced_open = {
         let timer_handle = open_timer_handle.clone();
@@ -534,7 +537,9 @@ pub fn App() -> impl IntoView {
         let base_image = base_image.clone();
         let redraw_bg = redraw_bg.clone();
         let redraw_canvas = redraw_canvas.clone();
-        Rc::new(move |img_src: String, w: u32, h: u32| {
+        let set_image_dimensions = set_image_dimensions.clone();
+        let set_dimension_text = set_dimension_text.clone();
+        Rc::new(move |img_src: String, resize: bool| {
             let img = HtmlImageElement::new().unwrap();
             let img_clone = img.clone();
             let base_image_clone = base_image.clone();
@@ -542,8 +547,12 @@ pub fn App() -> impl IntoView {
             let redraw = redraw_canvas.clone();
             let bg_canvas_ref_clone = bg_canvas_ref.clone();
             let canvas_ref_clone = canvas_ref.clone();
+            let set_image_dimensions = set_image_dimensions.clone();
+            let set_dimension_text = set_dimension_text.clone();
 
             let onload = Closure::<dyn FnMut()>::wrap(Box::new(move || {
+                let w = img_clone.natural_width();
+                let h = img_clone.natural_height();
                 if let Some(canvas) = bg_canvas_ref_clone.get() {
                     canvas.set_width(w);
                     canvas.set_height(h);
@@ -558,14 +567,16 @@ pub fn App() -> impl IntoView {
                 redraw_bg();
                 redraw();
 
-                leptos::task::spawn_local(async move {
-                    let args = serde_wasm_bindgen::to_value(&ResizeArgs {
-                        width: w as f64,
-                        height: h as f64,
-                    })
-                    .unwrap_or(JsValue::NULL);
-                    let _ = call_tauri("resize_window", args).await;
-                });
+                if resize {
+                    leptos::task::spawn_local(async move {
+                        let args = serde_wasm_bindgen::to_value(&ResizeArgs {
+                            width: w as f64,
+                            height: h as f64,
+                        })
+                        .unwrap_or(JsValue::NULL);
+                        let _ = call_tauri("resize_window", args).await;
+                    });
+                }
             }));
 
             img.set_onload(Some(onload.as_ref().unchecked_ref()));
@@ -581,20 +592,8 @@ pub fn App() -> impl IntoView {
                 let switch_img = switch_image.clone();
                 async move {
                     if let Ok(val) = call_tauri("get_image_data", JsValue::NULL).await {
-                        if let Some(img_data_url) = val.as_string() {
-                            let img = HtmlImageElement::new().unwrap();
-                            let img_clone = img.clone();
-                            let switch_img_clone = switch_img.clone();
-
-                            let onload = Closure::<dyn FnMut()>::wrap(Box::new(move || {
-                                let w = img_clone.natural_width();
-                                let h = img_clone.natural_height();
-                                switch_img_clone(img_clone.src(), w, h);
-                            }));
-
-                            img.set_onload(Some(onload.as_ref().unchecked_ref()));
-                            onload.forget();
-                            img.set_src(&img_data_url);
+                        if let Some(img_url) = val.as_string() {
+                            switch_img(img_url, false);
                         }
                     }
                 }
@@ -621,6 +620,57 @@ pub fn App() -> impl IntoView {
                 }
             }
         });
+    };
+
+    Effect::new(move |_| {
+        leptos::task::spawn_local(async move {
+            if let Ok(val) = call_tauri("get_config", JsValue::NULL).await {
+                if let Ok(cfg) = serde_wasm_bindgen::from_value::<AppConfig>(val) {
+                    set_stroke_width.set(cfg.default_stroke_width);
+                    set_color.set(cfg.default_color.clone());
+                    set_app_config.set(cfg);
+                }
+            }
+        });
+    });
+
+    let save_app_config = Rc::new(move |new_cfg: AppConfig| {
+        set_app_config.set(new_cfg.clone());
+        leptos::task::spawn_local(async move {
+            let args = serde_wasm_bindgen::to_value(&SetConfigArgs { config: new_cfg })
+                .unwrap_or(JsValue::NULL);
+            let _ = call_tauri("set_config", args).await;
+        });
+    });
+
+
+    let toggle_close_on_copy = {
+        let save_cfg = save_app_config.clone();
+        move |_| {
+            let mut cfg = app_config.get_untracked();
+            cfg.close_on_copy = !cfg.close_on_copy;
+            save_cfg(cfg);
+        }
+    };
+
+    let set_default_stroke = {
+        let save_cfg = save_app_config.clone();
+        Rc::new(move |w: f64| {
+            let mut cfg = app_config.get_untracked();
+            cfg.default_stroke_width = w;
+            set_stroke_width.set(w);
+            save_cfg(cfg);
+        })
+    };
+
+    let set_default_color_val = {
+        let save_cfg = save_app_config.clone();
+        Rc::new(move |c: String| {
+            let mut cfg = app_config.get_untracked();
+            cfg.default_color = c.clone();
+            set_color.set(c);
+            save_cfg(cfg);
+        })
     };
 
     let copy_text_direct = move |text_str: String| {
@@ -680,6 +730,7 @@ pub fn App() -> impl IntoView {
         let fetch_gallery = fetch_gallery.clone();
         let set_show_gallery = set_show_gallery.clone();
         Arc::new(move || {
+            set_show_settings.set(false);
             set_show_gallery.set(true);
             fetch_gallery(0, false);
         })
@@ -693,23 +744,10 @@ pub fn App() -> impl IntoView {
                 leptos::task::spawn_local(async move {
                     let args = serde_wasm_bindgen::to_value(&LoadGalleryArgs { path }).unwrap_or(JsValue::NULL);
                     if let Ok(val) = call_tauri("load_gallery_image", args).await {
-                        if let Some(img_data_url) = val.as_string() {
-                            let img = HtmlImageElement::new().unwrap();
-                            let img_clone = img.clone();
-                            let switch_img_clone = switch_img.clone();
-                            let filename_clone = filename.clone();
-
-                            let onload = Closure::<dyn FnMut()>::wrap(Box::new(move || {
-                                let w = img_clone.natural_width();
-                                let h = img_clone.natural_height();
-                                switch_img_clone(img_clone.src(), w, h);
-                                notify(format!("Cargada: {}", filename_clone));
-                                close_gallery();
-                            }));
-
-                            img.set_onload(Some(onload.as_ref().unchecked_ref()));
-                            onload.forget();
-                            img.set_src(&img_data_url);
+                        if let Some(img_url) = val.as_string() {
+                            switch_img(img_url, true);
+                            notify(format!("Cargada: {}", filename));
+                            close_gallery();
                         }
                     }
                 });
@@ -896,8 +934,31 @@ pub fn App() -> impl IntoView {
                         new_height,
                     } => {
                         *items.borrow_mut() = prev_items.clone();
-                        switch_img(prev_image_data.clone(), prev_width, prev_height);
+                        switch_img(prev_image_data.clone(), true);
                         future.borrow_mut().push(HistoryAction::Crop {
+                            prev_image_data,
+                            prev_items,
+                            prev_width,
+                            prev_height,
+                            new_image_data,
+                            new_items,
+                            new_width,
+                            new_height,
+                        });
+                    }
+                    HistoryAction::Rotate {
+                        prev_image_data,
+                        prev_items,
+                        prev_width,
+                        prev_height,
+                        new_image_data,
+                        new_items,
+                        new_width,
+                        new_height,
+                    } => {
+                        *items.borrow_mut() = prev_items.clone();
+                        switch_img(prev_image_data.clone(), true);
+                        future.borrow_mut().push(HistoryAction::Rotate {
                             prev_image_data,
                             prev_items,
                             prev_width,
@@ -982,8 +1043,31 @@ pub fn App() -> impl IntoView {
                         new_height,
                     } => {
                         *items.borrow_mut() = new_items.clone();
-                        switch_img(new_image_data.clone(), new_width, new_height);
+                        switch_img(new_image_data.clone(), true);
                         history.borrow_mut().push(HistoryAction::Crop {
+                            prev_image_data,
+                            prev_items,
+                            prev_width,
+                            prev_height,
+                            new_image_data,
+                            new_items,
+                            new_width,
+                            new_height,
+                        });
+                    }
+                    HistoryAction::Rotate {
+                        prev_image_data,
+                        prev_items,
+                        prev_width,
+                        prev_height,
+                        new_image_data,
+                        new_items,
+                        new_width,
+                        new_height,
+                    } => {
+                        *items.borrow_mut() = new_items.clone();
+                        switch_img(new_image_data.clone(), true);
+                        history.borrow_mut().push(HistoryAction::Rotate {
                             prev_image_data,
                             prev_items,
                             prev_width,
@@ -1061,6 +1145,118 @@ pub fn App() -> impl IntoView {
         }
     };
 
+    let rotate_image = {
+        let bg_canvas_ref = bg_canvas_ref.clone();
+        let base_image = base_image.clone();
+        let items = items.clone();
+        let history = history.clone();
+        let future = future.clone();
+        let switch_img = switch_image.clone();
+        let session = session.clone();
+        Rc::new(move |clockwise: bool| {
+            let bg_canvas = match bg_canvas_ref.get() {
+                Some(c) => c,
+                None => return,
+            };
+            let cur_w = bg_canvas.width();
+            let cur_h = bg_canvas.height();
+            if cur_w == 0 || cur_h == 0 {
+                return;
+            }
+
+            let doc = match web_sys::window().and_then(|win| win.document()) {
+                Some(d) => d,
+                None => return,
+            };
+            let off_canvas: HtmlCanvasElement = match doc.create_element("canvas").ok().and_then(|el| el.dyn_into().ok()) {
+                Some(c) => c,
+                None => return,
+            };
+
+            let new_w = cur_h;
+            let new_h = cur_w;
+            off_canvas.set_width(new_w);
+            off_canvas.set_height(new_h);
+
+            let off_ctx = match off_canvas.get_context("2d").ok().flatten().and_then(|c| c.dyn_into::<CanvasRenderingContext2d>().ok()) {
+                Some(c) => c,
+                None => return,
+            };
+
+            if clockwise {
+                let _ = off_ctx.translate(new_w as f64, 0.0);
+                let _ = off_ctx.rotate(std::f64::consts::FRAC_PI_2);
+            } else {
+                let _ = off_ctx.translate(0.0, new_h as f64);
+                let _ = off_ctx.rotate(-std::f64::consts::FRAC_PI_2);
+            }
+
+            let _ = off_ctx.draw_image_with_html_canvas_element(&bg_canvas, 0.0, 0.0);
+
+            let new_img_data = off_canvas.to_data_url().unwrap_or_default();
+            if new_img_data.is_empty() {
+                return;
+            }
+
+            let prev_img_data = base_image.borrow().as_ref().map(|i| i.src()).unwrap_or_default();
+            let prev_items_list = items.borrow().clone();
+            let prev_w = cur_w;
+            let prev_h = cur_h;
+
+            let mut new_items_list = prev_items_list.clone();
+            for itm in new_items_list.iter_mut() {
+                itm.rotate_90(clockwise, cur_w as f64, cur_h as f64);
+            }
+            *items.borrow_mut() = new_items_list.clone();
+
+            set_selected_item_index.set(None);
+            set_selected_item_info.set(None);
+            set_is_ocr_active.set(false);
+            set_ocr_blocks.set(Vec::new());
+            set_selected_ocr_indices.set(BTreeSet::new());
+
+            {
+                let mut sess = session.borrow_mut();
+                sess.is_drawing = false;
+                sess.start_point = None;
+                sess.crop_handle = None;
+                sess.hovered_item_index = None;
+                sess.drag_item_state = None;
+            }
+
+            history.borrow_mut().push(HistoryAction::Rotate {
+                prev_image_data: prev_img_data,
+                prev_items: prev_items_list,
+                prev_width: prev_w,
+                prev_height: prev_h,
+                new_image_data: new_img_data.clone(),
+                new_items: new_items_list,
+                new_width: new_w,
+                new_height: new_h,
+            });
+            future.borrow_mut().clear();
+
+            switch_img(new_img_data, true);
+            notify(if clockwise {
+                "Rotado 90° a la derecha".to_string()
+            } else {
+                "Rotado 90° a la izquierda".to_string()
+            });
+            set_can_undo.set(true);
+            set_can_redo.set(false);
+            set_can_clear.set(!items.borrow().is_empty());
+        })
+    };
+
+    Effect::new({
+        let rotate = rotate_image.clone();
+        move |_| {
+            if let Some((_, cw)) = trigger_rotate.get() {
+                rotate(cw);
+            }
+        }
+    });
+
 
     let on_copy_action = {
         let get_data = get_composite_data_url.clone();
@@ -1084,6 +1280,9 @@ pub fn App() -> impl IntoView {
                                 }
                             });
                             notify("Copiado al portapapeles".to_string());
+                            if app_config.get_untracked().close_on_copy {
+                                let _ = call_tauri("close_window", JsValue::NULL).await;
+                            }
                         }
                         Err(e) => {
                             let msg = e.as_string().unwrap_or_else(|| "Error al copiar".to_string());
@@ -1280,6 +1479,8 @@ pub fn App() -> impl IntoView {
                 e.prevent_default();
                 if show_gallery.get_untracked() {
                     close_gallery();
+                } else if show_settings.get_untracked() {
+                    set_show_settings.set(false);
                 } else if selected_item_index.get_untracked().is_some() {
                     set_selected_item_index.set(None);
                     set_selected_item_info.set(None);
@@ -1541,7 +1742,7 @@ pub fn App() -> impl IntoView {
         let redraw = redraw_canvas.clone();
         let base_image = base_image.clone();
         let items = items.clone();
-        move |ev: MouseEvent| {
+        Rc::new(move |ev: MouseEvent| {
             if session.borrow().is_panning {
                 let (sx, sy) = session.borrow().pan_start_mouse;
                 let (ix, iy) = session.borrow().pan_initial;
@@ -1558,8 +1759,17 @@ pub fn App() -> impl IntoView {
             let rect = canvas.get_bounding_client_rect();
             let scale_x = canvas.width() as f64 / rect.width();
             let scale_y = canvas.height() as f64 / rect.height();
-            let x = (ev.client_x() as f64 - rect.left()) * scale_x;
-            let y = (ev.client_y() as f64 - rect.top()) * scale_y;
+            let is_drawing = session.borrow().is_drawing;
+            let raw_x = (ev.client_x() as f64 - rect.left()) * scale_x;
+            let raw_y = (ev.client_y() as f64 - rect.top()) * scale_y;
+            let (x, y) = if is_drawing {
+                (
+                    raw_x.clamp(0.0, canvas.width() as f64),
+                    raw_y.clamp(0.0, canvas.height() as f64),
+                )
+            } else {
+                (raw_x, raw_y)
+            };
 
             let tool = active_tool.get_untracked();
 
@@ -1859,6 +2069,20 @@ pub fn App() -> impl IntoView {
                 }
                 Tool::Select | Tool::Picker => {}
             }
+        })
+    };
+
+    let on_canvas_mouse_move = {
+        let session = session.clone();
+        let on_move = on_mouse_move.clone();
+        move |ev: MouseEvent| {
+            let is_active = {
+                let s = session.borrow();
+                s.is_drawing || s.drag_item_state.is_some() || s.is_panning
+            };
+            if !is_active {
+                on_move(ev);
+            }
         }
     };
 
@@ -2025,13 +2249,11 @@ pub fn App() -> impl IntoView {
     };
 
     let on_mouse_leave = {
-        let action = on_mouse_up_action.clone();
         let session = session.clone();
         move |_ev: MouseEvent| {
             set_picker_preview.set(None);
             session.borrow_mut().hovered_item_index = None;
             set_is_hovering_shape.set(false);
-            action();
         }
     };
 
@@ -2060,9 +2282,18 @@ pub fn App() -> impl IntoView {
         let session = session.clone();
         let canvas_ref = canvas_ref.clone();
         let redraw = redraw_canvas.clone();
+        let on_move = on_mouse_move.clone();
         move |ev: MouseEvent| {
-            let handle_opt = session.borrow().crop_handle;
-            if let Some(handle) = handle_opt {
+            let (is_crop, is_active) = {
+                let s = session.borrow();
+                (
+                    s.crop_handle.is_some(),
+                    s.is_drawing || s.drag_item_state.is_some() || s.is_panning,
+                )
+            };
+            if is_crop {
+                let handle_opt = session.borrow().crop_handle;
+                if let Some(handle) = handle_opt {
                 if let Some(canvas) = canvas_ref.get() {
                     let total_w = canvas.width() as f64;
                     let total_h = canvas.height() as f64;
@@ -2165,6 +2396,9 @@ pub fn App() -> impl IntoView {
                         ctx.restore();
                     }
                 }
+                }
+            } else if is_active {
+                on_move(ev);
             }
         }
     });
@@ -2178,8 +2412,15 @@ pub fn App() -> impl IntoView {
         let future = future.clone();
         let switch_img = switch_image.clone();
         let redraw = redraw_canvas.clone();
+        let action = on_mouse_up_action.clone();
         move |_| {
-            let had_handle = session.borrow().crop_handle.is_some();
+            let (had_handle, is_active) = {
+                let s = session.borrow();
+                (
+                    s.crop_handle.is_some(),
+                    s.is_drawing || s.drag_item_state.is_some() || s.is_panning,
+                )
+            };
             if had_handle {
                 let mut sess = session.borrow_mut();
                 sess.crop_handle = None;
@@ -2242,7 +2483,7 @@ pub fn App() -> impl IntoView {
                         });
                         future.borrow_mut().clear();
 
-                        switch_img(new_img_data, new_w, new_h);
+                        switch_img(new_img_data, true);
                         notify(format!("Recortado a {}x{}", new_w, new_h));
                         set_can_undo.set(true);
                         set_can_redo.set(false);
@@ -2251,6 +2492,8 @@ pub fn App() -> impl IntoView {
                         redraw();
                     }
                 }
+            } else if is_active {
+                action();
             }
         }
     });
@@ -2313,10 +2556,10 @@ pub fn App() -> impl IntoView {
             </div>
 
             <aside
-                class="absolute left-2.5 top-2.5 bottom-2.5 w-13 bg-zinc-900 border border-white/10 rounded-lg flex flex-col items-center py-2.5 justify-between z-40 shadow-2xl overflow-visible"
+                class="absolute left-2.5 top-2.5 bottom-2.5 w-13 bg-zinc-900 border border-white/10 rounded-lg flex flex-col items-center py-2 justify-between z-40 shadow-2xl overflow-visible"
                 on:click=move |e| e.stop_propagation()
             >
-                <div class="flex flex-col items-center gap-1.5 w-full">
+                <div class="flex flex-col items-center gap-1 w-full">
                     {move || {
                         if !is_tiling.get() {
                             view! {
@@ -2368,7 +2611,7 @@ pub fn App() -> impl IntoView {
 
                     <div class=move || {
                         let is_forced = forced_open_group.get() == Some(2);
-                        format!("relative group/freehand tooltip-trigger w-full h-8.5 flex items-center justify-center {}", if is_forced { "is-forced-open" } else { "" })
+                        format!("relative tool-group-freehand group/freehand tooltip-trigger w-full h-8.5 flex items-center justify-center {}", if is_forced { "is-forced-open" } else { "" })
                     }>
                         <button
                             class=move || {
@@ -2393,7 +2636,7 @@ pub fn App() -> impl IntoView {
                             {move || tool_info(selected_freehand_slot.get()).1}
                         </div>
 
-                        <div class="flyout-panel">
+                        <div class="flyout-panel group-hover/freehand:opacity-100 group-hover/freehand:pointer-events-auto group-hover/freehand:translate-x-0">
                             <button
                                 class=move || {
                                     let is_act = !is_ocr_active.get() && active_tool.get() == Tool::Pen;
@@ -2436,7 +2679,7 @@ pub fn App() -> impl IntoView {
 
                     <div class=move || {
                         let is_forced = forced_open_group.get() == Some(3);
-                        format!("relative group/shapes tooltip-trigger w-full h-8.5 flex items-center justify-center {}", if is_forced { "is-forced-open" } else { "" })
+                        format!("relative tool-group-shapes group/shapes tooltip-trigger w-full h-8.5 flex items-center justify-center {}", if is_forced { "is-forced-open" } else { "" })
                     }>
                         <button
                             class=move || {
@@ -2461,7 +2704,7 @@ pub fn App() -> impl IntoView {
                             {move || tool_info(selected_shape_slot.get()).1}
                         </div>
 
-                        <div class="flyout-panel">
+                        <div class="flyout-panel group-hover/shapes:opacity-100 group-hover/shapes:pointer-events-auto group-hover/shapes:translate-x-0">
                             <button
                                 class=move || {
                                     let is_act = !is_ocr_active.get() && active_tool.get() == Tool::Rectangle;
@@ -2630,78 +2873,74 @@ pub fn App() -> impl IntoView {
 
                     <div class="w-6 h-px bg-white/10 my-0.5"></div>
 
-                    <div class="accordion-group-colors">
-                        <div class="relative tooltip-trigger w-full flex items-center justify-center">
-                            <button
-                                class="w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer hover:bg-white/5 relative"
-                                aria-label="Color y grosor"
+                    <div class="relative tool-group-colors group/colors tooltip-trigger w-full h-8.5 flex items-center justify-center">
+                        <button
+                            class="w-8.5 h-8.5 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer hover:bg-white/5 relative"
+                            aria-label="Color y grosor"
+                        >
+                            <span
+                                class="w-4 h-4 rounded-full border border-white/30 shadow-xs flex items-center justify-center"
+                                style=move || format!("background-color: {}", color.get())
                             >
                                 <span
-                                    class="w-4 h-4 rounded-full border border-white/30 shadow-xs flex items-center justify-center"
-                                    style=move || format!("background-color: {}", color.get())
-                                >
-                                    <span
-                                        class="rounded-full bg-white/90"
-                                        style=move || format!("width: {}px; height: {}px;", (stroke_width.get() / 3.5).clamp(2.0, 7.0), (stroke_width.get() / 3.5).clamp(2.0, 7.0))
-                                    />
-                                </span>
-                                <span class="w-1 h-1 rounded-full bg-zinc-500/70 absolute bottom-1 pointer-events-none" />
-                            </button>
-                            <div class="sidebar-tooltip px-2 py-1 bg-zinc-900 border border-white/10 text-zinc-200 text-[11px] font-medium rounded-lg shadow-xl">
-                                {move || format!("Color y grosor ({}px)", stroke_width.get())}
-                            </div>
+                                    class="rounded-full bg-white/90"
+                                    style=move || format!("width: {}px; height: {}px;", (stroke_width.get() / 3.5).clamp(2.0, 7.0), (stroke_width.get() / 3.5).clamp(2.0, 7.0))
+                                />
+                            </span>
+                            <span class="w-1 h-1 rounded-full bg-zinc-500/70 absolute bottom-1 pointer-events-none" />
+                        </button>
+                        <div class="sidebar-tooltip px-2 py-1 bg-zinc-900 border border-white/10 text-zinc-200 text-[11px] font-medium rounded-lg shadow-xl">
+                            {move || format!("Color y grosor ({}px)", stroke_width.get())}
                         </div>
 
-                        <div class="accordion-drawer">
-                            <div class="accordion-drawer-inner px-1.5 py-1.5 bg-white/[0.04] rounded-lg border border-white/5 my-0.5 w-full">
-                                <div class="grid grid-cols-2 gap-1.5 w-full justify-items-center">
-                                    {COLOR_LIST.iter().map(|(c_hex, _)| {
-                                        let hex = c_hex.to_string();
-                                        let hex_clone = hex.clone();
-                                        let hex_aria = hex.clone();
-                                        let is_active = move || color.get() == hex;
-                                        view! {
-                                            <button
-                                                class=move || {
-                                                    format!(
-                                                        "w-3.5 h-3.5 rounded-full transition-all duration-150 cursor-pointer border border-white/15 flex items-center justify-center {}",
-                                                        if is_active() { "ring-2 ring-white" } else { "opacity-80 hover:opacity-100" }
-                                                    )
-                                                }
-                                                style=format!("background-color: {}", c_hex)
-                                                aria-label=format!("Color {}", hex_aria)
-                                                on:click=move |_| { set_color.set(hex_clone.clone()); }
-                                            />
-                                        }
-                                    }).collect_view()}
-                                </div>
-
-                                <div class="w-6 h-px bg-white/10 my-1"></div>
-
-                                <div class="flex flex-col gap-1 w-full items-center">
-                                    {WIDTHS.iter().map(|(w_val, line_class)| {
-                                        let width_val = *w_val;
-                                        let is_active = move || stroke_width.get() == width_val;
-                                        view! {
-                                            <button
-                                                class=move || format!(
-                                                    "w-full flex items-center justify-center py-1 px-1.5 rounded transition-all duration-150 cursor-pointer {}",
-                                                    if is_active() { "bg-white/20 text-white" } else { "text-zinc-500 hover:text-zinc-200 hover:bg-white/5" }
+                        <div class="flyout-panel flex-col gap-2 p-2.5 w-44 group-hover/colors:opacity-100 group-hover/colors:pointer-events-auto group-hover/colors:translate-x-0">
+                            <div class="grid grid-cols-5 gap-1.5 w-full justify-items-center">
+                                {COLOR_LIST.iter().map(|(c_hex, _)| {
+                                    let hex = c_hex.to_string();
+                                    let hex_clone = hex.clone();
+                                    let hex_aria = hex.clone();
+                                    let is_active = move || color.get() == hex;
+                                    view! {
+                                        <button
+                                            class=move || {
+                                                format!(
+                                                    "w-4.5 h-4.5 rounded-full transition-all duration-150 cursor-pointer border border-white/15 flex items-center justify-center {}",
+                                                    if is_active() { "ring-2 ring-white scale-110" } else { "opacity-80 hover:opacity-100 hover:scale-105" }
                                                 )
-                                                aria-label=format!("Grosor {}px", width_val)
-                                                on:click=move |_| { set_stroke_width.set(width_val); }
-                                            >
-                                                <span class=format!("w-full bg-current rounded-full {}", line_class)></span>
-                                            </button>
-                                        }
-                                    }).collect_view()}
-                                </div>
+                                            }
+                                            style=format!("background-color: {}", c_hex)
+                                            aria-label=format!("Color {}", hex_aria)
+                                            on:click=move |_| { set_color.set(hex_clone.clone()); }
+                                        />
+                                    }
+                                }).collect_view()}
+                            </div>
+
+                            <div class="w-full h-px bg-white/10"></div>
+
+                            <div class="grid grid-cols-4 gap-1 w-full items-center">
+                                {WIDTHS.iter().map(|(w_val, line_class)| {
+                                    let width_val = *w_val;
+                                    let is_active = move || stroke_width.get() == width_val;
+                                    view! {
+                                        <button
+                                            class=move || format!(
+                                                "h-6 flex items-center justify-center px-1 rounded transition-all duration-150 cursor-pointer {}",
+                                                if is_active() { "bg-white/20 text-white ring-1 ring-white/30" } else { "text-zinc-400 hover:text-zinc-200 hover:bg-white/5" }
+                                            )
+                                            aria-label=format!("Grosor {}px", width_val)
+                                            on:click=move |_| { set_stroke_width.set(width_val); }
+                                        >
+                                            <span class=format!("w-4 bg-current rounded-full {}", line_class)></span>
+                                        </button>
+                                    }
+                                }).collect_view()}
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <div class="flex flex-col items-center gap-1.5 w-full">
+                <div class="flex flex-col items-center gap-1 w-full">
                     <div class="relative tooltip-trigger w-full flex items-center justify-center">
                         <button
                             class=move || format!(
@@ -2849,6 +3088,30 @@ pub fn App() -> impl IntoView {
                             "Biblioteca · Tab"
                         </div>
                     </div>
+
+                    <div class="relative tooltip-trigger w-full flex items-center justify-center">
+                        <button
+                            class=move || format!(
+                                "w-8.5 h-8.5 rounded-lg transition-all duration-150 flex items-center justify-center cursor-pointer {}",
+                                if show_settings.get() { "text-zinc-100 bg-white/15" } else { "text-zinc-400 hover:text-zinc-100 hover:bg-white/5" }
+                            )
+                            aria-label="Configuración"
+                            on:click=move |_| {
+                                set_show_settings.update(|s| *s = !*s);
+                                if show_settings.get_untracked() {
+                                    set_show_gallery.set(false);
+                                }
+                            }
+                        >
+                            <svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="3" />
+                                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                            </svg>
+                        </button>
+                        <div class="sidebar-tooltip px-2 py-1 bg-zinc-900 border border-white/10 text-zinc-200 text-[11px] font-medium rounded-lg shadow-xl">
+                            "Configuración"
+                        </div>
+                    </div>
                 </div>
             </aside>
 
@@ -2873,7 +3136,7 @@ pub fn App() -> impl IntoView {
                 >
                     <canvas
                         node_ref=bg_canvas_ref
-                        class="block max-w-full max-h-[calc(100vh-1.5rem)] object-contain rounded-sm pointer-events-none"
+                        class="block max-w-full max-h-[calc(100vh-3.5rem)] object-contain rounded-sm pointer-events-none"
                     />
                     <canvas
                         node_ref=canvas_ref
@@ -2889,12 +3152,12 @@ pub fn App() -> impl IntoView {
                                 "cursor-crosshair"
                             };
                             format!(
-                                "{} absolute inset-0 w-full h-full block max-w-full max-h-[calc(100vh-1.5rem)] object-contain rounded-sm pointer-events-auto",
+                                "{} absolute inset-0 w-full h-full block max-w-full max-h-[calc(100vh-3.5rem)] object-contain rounded-sm pointer-events-auto",
                                 cursor
                             )
                         }
                         on:mousedown=on_mouse_down
-                        on:mousemove=on_mouse_move
+                        on:mousemove=on_canvas_mouse_move
                         on:mouseup=on_mouse_up
                         on:mouseleave=on_mouse_leave
                     />
@@ -3188,20 +3451,57 @@ pub fn App() -> impl IntoView {
                         let dt = dimension_text.get();
                         let active = is_cropping_active.get();
                         let snapped = is_crop_snapped.get();
-                        if !dt.is_empty() {
-                            view! {
-                                <div class=move || {
-                                    format!(
-                                        "absolute -bottom-7 left-1/2 -translate-x-1/2 bg-zinc-900 {} border border-white/10 px-2.5 py-0.5 rounded-lg text-[10px] font-mono shadow-xl pointer-events-none transition-all duration-150 {}",
-                                        if snapped { "text-white ring-1 ring-white/30 bg-white/10" } else { "text-zinc-300" },
-                                        if active { "opacity-100 ring-1 ring-white/30" } else { "opacity-0 group-hover:opacity-90" }
-                                    )
-                                }>
-                                    {dt.clone()}
-                                </div>
-                            }.into_any()
-                        } else {
-                            view! { <span></span> }.into_any()
+
+                        view! {
+                            <div
+                                class=move || format!(
+                                    "absolute top-full mt-2 left-1/2 -translate-x-1/2 flex items-center gap-0.5 bg-zinc-900/95 border border-white/10 px-1 py-0.5 rounded-lg shadow-xl backdrop-blur-sm z-30 pointer-events-auto whitespace-nowrap flex-nowrap w-max shrink-0 transition-all duration-150 {}",
+                                    if active { "ring-1 ring-white/30" } else { "" }
+                                )
+                            >
+                                <button
+                                    class="p-1 rounded text-zinc-400 hover:text-zinc-100 hover:bg-white/10 transition-colors cursor-pointer shrink-0 focus:outline-none"
+                                    title="Rotar 90° antihorario"
+                                    aria-label="Rotar 90° antihorario"
+                                    on:click=move |_| set_trigger_rotate.update(|v| {
+                                        let c = v.map(|(count, _)| count).unwrap_or(0).wrapping_add(1);
+                                        *v = Some((c, false));
+                                    })
+                                >
+                                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                                        <path d="M3 3v5h5" />
+                                    </svg>
+                                </button>
+
+                                {if !dt.is_empty() {
+                                    view! {
+                                        <span class=format!(
+                                            "text-[10px] font-mono px-1.5 select-none pointer-events-none whitespace-nowrap shrink-0 {}",
+                                            if snapped { "text-white font-medium" } else { "text-zinc-300" }
+                                        )>
+                                            {dt.clone()}
+                                        </span>
+                                    }.into_any()
+                                } else {
+                                    view! { <span></span> }.into_any()
+                                }}
+
+                                <button
+                                    class="p-1 rounded text-zinc-400 hover:text-zinc-100 hover:bg-white/10 transition-colors cursor-pointer shrink-0 focus:outline-none"
+                                    title="Rotar 90° horario"
+                                    aria-label="Rotar 90° horario"
+                                    on:click=move |_| set_trigger_rotate.update(|v| {
+                                        let c = v.map(|(count, _)| count).unwrap_or(0).wrapping_add(1);
+                                        *v = Some((c, true));
+                                    })
+                                >
+                                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                                        <path d="M21 3v5h-5" />
+                                    </svg>
+                                </button>
+                            </div>
                         }
                     }}
                 </div>
@@ -3645,6 +3945,145 @@ pub fn App() -> impl IntoView {
                                 }.into_any()
                             }
                         }}
+                    </div>
+                </div>
+
+                <div
+                    class=move || {
+                        let is_open = show_settings.get();
+                        format!(
+                            "fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs select-none transition-all duration-150 {}",
+                            if is_open {
+                                "opacity-100 pointer-events-auto"
+                            } else {
+                                "opacity-0 pointer-events-none"
+                            }
+                        )
+                    }
+                    on:click=move |_| set_show_settings.set(false)
+                    on:wheel=move |e| e.stop_propagation()
+                >
+                    <div
+                        class="w-full max-w-md max-h-[85vh] bg-zinc-900 border border-white/10 rounded-xl shadow-2xl p-4 sm:p-5 flex flex-col gap-4 ring-1 ring-white/5 overflow-y-auto no-scrollbar"
+                        on:click=move |e| e.stop_propagation()
+                    >
+                        <div class="flex items-center justify-between pb-3 border-b border-white/10">
+                            <div class="flex items-center gap-2">
+                                <svg class="w-4 h-4 text-zinc-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                    <circle cx="12" cy="12" r="3" />
+                                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                                </svg>
+                                <h2 class="text-xs font-semibold text-zinc-200 tracking-tight">"Preferencias"</h2>
+                            </div>
+                            <button
+                                class="text-zinc-400 hover:text-zinc-100 p-1 rounded-lg hover:bg-white/5 transition-all duration-150 cursor-pointer"
+                                aria-label="Cerrar preferencias"
+                                on:click=move |_| set_show_settings.set(false)
+                            >
+                                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M18 6L12 12M12 12L6 18M12 12L18 18M12 12L6 6" />
+                                </svg>
+                            </button>
+                        </div>
+
+                        <div class="flex flex-col gap-4 text-xs">
+                            <div class="flex flex-col gap-2">
+                                <span class="text-[10px] font-medium text-zinc-500 uppercase tracking-wider">"Captura y comportamiento"</span>
+                                <div class="p-3 bg-white/[0.03] border border-white/5 rounded-lg flex items-center justify-between gap-3">
+                                    <div class="flex flex-col gap-0.5">
+                                        <span class="text-zinc-200 font-medium text-[12px]">"Cerrar al copiar"</span>
+                                        <span class="text-zinc-500 text-[11px]">"Cierra la ventana automáticamente tras copiar al portapapeles"</span>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        role="switch"
+                                        aria-checked=move || if app_config.get().close_on_copy { "true" } else { "false" }
+                                        class=move || format!(
+                                            "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out p-0.5 {}",
+                                            if app_config.get().close_on_copy { "bg-zinc-100" } else { "bg-zinc-700" }
+                                        )
+                                        on:click=toggle_close_on_copy
+                                    >
+                                        <span
+                                            class=move || format!(
+                                                "pointer-events-none inline-block h-4 w-4 transform rounded-full bg-zinc-900 shadow-sm transition duration-200 ease-in-out {}",
+                                                if app_config.get().close_on_copy { "translate-x-4" } else { "translate-x-0" }
+                                            )
+                                        />
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="flex flex-col gap-2">
+                                <span class="text-[10px] font-medium text-zinc-500 uppercase tracking-wider">"Herramientas iniciales"</span>
+                                <div class="p-3 bg-white/[0.03] border border-white/5 rounded-lg flex flex-col gap-2">
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-zinc-200 font-medium text-[12px]">"Grosor predeterminado"</span>
+                                        <span class="text-zinc-400 font-mono text-[11px]">{move || format!("{:.1}px", app_config.get().default_stroke_width)}</span>
+                                    </div>
+                                    <div class="flex items-center gap-1.5 pt-1">
+                                        {WIDTHS.iter().map(|(w, h_class)| {
+                                            let width_val = *w;
+                                            let h_cls = *h_class;
+                                            let is_selected = move || (app_config.get().default_stroke_width - width_val).abs() < 0.1;
+                                            let on_select = {
+                                                let set_stroke = set_default_stroke.clone();
+                                                move |_| set_stroke(width_val)
+                                            };
+                                            view! {
+                                                <button
+                                                    class=move || format!(
+                                                        "flex-1 h-7 rounded flex items-center justify-center transition-all cursor-pointer {}",
+                                                        if is_selected() { "bg-white/15 ring-1 ring-white/30" } else { "bg-white/[0.04] hover:bg-white/[0.08]" }
+                                                    )
+                                                    on:click=on_select
+                                                >
+                                                    <div class=format!("w-5 bg-zinc-200 rounded-full {}", h_cls) />
+                                                </button>
+                                            }
+                                        }).collect_view()}
+                                    </div>
+                                </div>
+
+                                <div class="p-3 bg-white/[0.03] border border-white/5 rounded-lg flex flex-col gap-2">
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-zinc-200 font-medium text-[12px]">"Color predeterminado"</span>
+                                        <div class="w-3.5 h-3.5 rounded-full border border-white/20" style=move || format!("background-color: {}", app_config.get().default_color) />
+                                    </div>
+                                    <div class="flex items-center gap-1.5 pt-1 flex-wrap">
+                                        {COLOR_LIST.iter().map(|(col_val, _)| {
+                                            let c = col_val.to_string();
+                                            let c_clone = c.clone();
+                                            let is_selected = move || app_config.get().default_color == c;
+                                            let on_select = {
+                                                let set_col = set_default_color_val.clone();
+                                                move |_| set_col(c_clone.clone())
+                                            };
+                                            view! {
+                                                <button
+                                                    class=move || format!(
+                                                        "w-6 h-6 rounded-full flex items-center justify-center transition-all cursor-pointer border {}",
+                                                        if is_selected() { "border-white scale-110 shadow-sm" } else { "border-transparent hover:scale-105" }
+                                                    )
+                                                    style=format!("background-color: {}", col_val)
+                                                    on:click=on_select
+                                                />
+                                            }
+                                        }).collect_view()}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="flex items-center justify-between pt-2 border-t border-white/5 text-[11px] text-zinc-500">
+                                <span>"nil-shot v0.5.0"</span>
+                                <button
+                                    class="px-3 py-1 bg-white/10 hover:bg-white/15 text-zinc-200 rounded-md transition-colors cursor-pointer text-xs font-medium"
+                                    on:click=move |_| set_show_settings.set(false)
+                                >
+                                    "Listo"
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </main>

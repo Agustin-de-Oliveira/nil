@@ -68,6 +68,46 @@ pub struct OpenUrlArgs {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct AppConfig {
+    #[serde(default = "default_open_editor", alias = "openEditor")]
+    pub open_editor: bool,
+    #[serde(default, alias = "closeOnCopy")]
+    pub close_on_copy: bool,
+    #[serde(default = "default_stroke_width", alias = "defaultStrokeWidth")]
+    pub default_stroke_width: f64,
+    #[serde(default = "default_color", alias = "defaultColor")]
+    pub default_color: String,
+}
+
+fn default_open_editor() -> bool {
+    true
+}
+
+fn default_stroke_width() -> f64 {
+    5.0
+}
+
+fn default_color() -> String {
+    "#e06c75".to_string()
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            open_editor: true,
+            close_on_copy: false,
+            default_stroke_width: 5.0,
+            default_color: "#e06c75".to_string(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct SetConfigArgs {
+    pub config: AppConfig,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct OcrEntity {
     pub kind: String,
     pub value: String,
@@ -283,6 +323,42 @@ impl DrawingItem {
             }
         }
     }
+
+    pub fn rotate_90(&mut self, clockwise: bool, width: f64, height: f64) {
+        match self {
+            DrawingItem::Blur { start, end }
+            | DrawingItem::Arrow { start, end, .. }
+            | DrawingItem::Line { start, end, .. }
+            | DrawingItem::Rectangle { start, end, .. }
+            | DrawingItem::Circle { start, end, .. } => {
+                let (sx, sy) = (start.x, start.y);
+                let (ex, ey) = (end.x, end.y);
+                if clockwise {
+                    start.x = height - sy;
+                    start.y = sx;
+                    end.x = height - ey;
+                    end.y = ex;
+                } else {
+                    start.x = sy;
+                    start.y = width - sx;
+                    end.x = ey;
+                    end.y = width - ex;
+                }
+            }
+            DrawingItem::Freehand { points, .. } => {
+                for pt in points.iter_mut() {
+                    let (px, py) = (pt.x, pt.y);
+                    if clockwise {
+                        pt.x = height - py;
+                        pt.y = px;
+                    } else {
+                        pt.x = py;
+                        pt.y = width - px;
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -304,6 +380,16 @@ pub enum HistoryAction {
         new: DrawingItem,
     },
     Crop {
+        prev_image_data: String,
+        prev_items: Vec<DrawingItem>,
+        prev_width: u32,
+        prev_height: u32,
+        new_image_data: String,
+        new_items: Vec<DrawingItem>,
+        new_width: u32,
+        new_height: u32,
+    },
+    Rotate {
         prev_image_data: String,
         prev_items: Vec<DrawingItem>,
         prev_width: u32,

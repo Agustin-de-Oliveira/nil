@@ -8,14 +8,38 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Config {
+    #[serde(default = "default_open_editor", alias = "openEditor")]
     pub open_editor: bool,
+    #[serde(default, alias = "closeOnCopy")]
+    pub close_on_copy: bool,
+    #[serde(default = "default_stroke_width", alias = "defaultStrokeWidth")]
+    pub default_stroke_width: f64,
+    #[serde(default = "default_color", alias = "defaultColor")]
+    pub default_color: String,
+}
+
+fn default_open_editor() -> bool {
+    true
+}
+
+fn default_stroke_width() -> f64 {
+    5.0
+}
+
+fn default_color() -> String {
+    "#e06c75".to_string()
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { open_editor: true }
+        Self {
+            open_editor: true,
+            close_on_copy: false,
+            default_stroke_width: 5.0,
+            default_color: "#e06c75".to_string(),
+        }
     }
 }
 
@@ -566,7 +590,10 @@ fn get_sway_focused_output() -> Option<String> {
 }
 
 pub fn capture_area_image(target_path: &PathBuf) -> bool {
-    if let Ok(output) = Command::new("slurp").output() {
+    if let Ok(output) = Command::new("slurp")
+        .args(["-b", "00000000", "-c", "a1a1aaff"])
+        .output()
+    {
         if output.status.success() {
             let geometry = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !geometry.is_empty() {

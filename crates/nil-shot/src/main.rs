@@ -3,10 +3,10 @@
 use base64::Engine;
 use nil_core::{
     add_clipboard_image, add_clipboard_text, capture_area_image, capture_full_image,
-    copy_image_bytes_to_clipboard, copy_text_bytes_to_clipboard, create_note_with_content,
-    generate_temp_path, get_config_dir, get_hold_lock_path, get_png_dimensions,
-    get_shots_data_dir, list_gallery_items, load_config, notify_and_maybe_edit, run_tesseract,
-    save_config_file, Config, GalleryResponse, OcrBlock,
+    copy_image_bytes_to_clipboard, copy_text_bytes_to_clipboard,
+    create_note_with_content, generate_temp_path, get_config_dir, get_hold_lock_path,
+    get_png_dimensions, get_shots_data_dir, list_gallery_items, load_config,
+    notify_and_maybe_edit, run_tesseract, save_config_file, Config, GalleryResponse, OcrBlock,
 };
 use std::env;
 use std::fs;
@@ -38,7 +38,9 @@ fn calculate_window_size(img_w: f64, img_h: f64, mon_w: f64, mon_h: f64) -> (f64
         (content_w, content_h)
     };
 
-    (target_w.clamp(520.0, max_w), target_h.clamp(460.0, max_h))
+    let min_w = 520.0_f64.min(max_w);
+    let min_h = 620.0_f64.min(max_h);
+    (target_w.clamp(min_w, max_w), target_h.clamp(min_h, max_h))
 }
 
 #[tauri::command]
@@ -47,21 +49,36 @@ fn get_config(state: State<AppState>) -> Result<Config, String> {
 }
 
 #[tauri::command]
-fn set_config(state: State<AppState>, open_editor: Option<bool>) -> Result<(), String> {
-    let open = open_editor.unwrap_or(true);
-    let cfg = Config { open_editor: open };
+fn set_config(
+    state: State<AppState>,
+    config: Option<Config>,
+    open_editor: Option<bool>,
+    close_on_copy: Option<bool>,
+) -> Result<(), String> {
+    let mut cfg = if let Some(c) = config {
+        c
+    } else {
+        load_config(&state.config_path)
+    };
+    if let Some(open) = open_editor {
+        cfg.open_editor = open;
+    }
+    if let Some(close) = close_on_copy {
+        cfg.close_on_copy = close;
+    }
     save_config_file(&state.config_path, &cfg)
 }
 
 #[tauri::command]
-fn get_image_data(state: State<AppState>) -> Result<String, String> {
+fn get_image_data(state: State<AppState>) -> Result<Option<String>, String> {
     let lock = state.image_path.lock().map_err(|e| e.to_string())?;
-    let path = lock
-        .as_ref()
-        .ok_or_else(|| "No image path provided".to_string())?;
+    let path = match lock.as_ref() {
+        Some(p) => p,
+        None => return Ok(None),
+    };
     let bytes = fs::read(path).map_err(|e| e.to_string())?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    Ok(format!("data:image/png;base64,{}", encoded))
+    Ok(Some(format!("data:image/png;base64,{}", encoded)))
 }
 
 #[tauri::command]
@@ -213,20 +230,12 @@ async fn get_gallery_items(offset: usize, limit: usize) -> Result<GalleryRespons
 }
 
 #[tauri::command]
-async fn load_gallery_image(
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<String, String> {
+fn load_gallery_image(state: State<AppState>, path: String) -> Result<String, String> {
     let p = PathBuf::from(&path);
     if !p.exists() {
         return Err("El archivo no existe".to_string());
     }
-    let p_clone = p.clone();
-    let bytes = tauri::async_runtime::spawn_blocking(move || fs::read(&p_clone))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
-
+    let bytes = fs::read(&p).map_err(|e| e.to_string())?;
     let mut lock = state.image_path.lock().map_err(|e| e.to_string())?;
     *lock = Some(p);
     let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -350,6 +359,7 @@ fn launch_tauri(image_path: Option<PathBuf>, config_path: PathBuf) {
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
                     .title("nil-shot")
                     .inner_size(win_w, win_h)
+                    .min_inner_size(520.0, 620.0)
                     .center()
                     .decorations(false)
                     .transparent(false)
@@ -391,7 +401,7 @@ fn run_full_capture(config_path: &PathBuf) {
 fn run_area_capture(config_path: &PathBuf) {
     let path = generate_temp_path();
     if capture_area_image(&path) {
-        if notify_and_maybe_edit(&path, "Captura copiada", "\u{00c1}rea guardada en el portapapeles") {
+        if notify_and_maybe_edit(&path, "Captura copiada", "Área seleccionada en el portapapeles") {
             launch_tauri(Some(path), config_path.clone());
         }
     }
